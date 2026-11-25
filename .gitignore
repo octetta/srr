@@ -1,0 +1,17 @@
+*.o
+*.a
+*.exe
+libsrr.a
+libsrr_win32.a
+tests/test_srr_basic
+tests/test_srr_races
+tests/test_srr_stress
+tests/test_srr_ipc
+tests/*.exe
+benchmarks/bench_srr
+examples/synth_engine/synth_server
+examples/synth_engine/synth_cli
+adapters/beam/srr_port_driver
+__pycache__/
+*.sock
+.DS_Store
