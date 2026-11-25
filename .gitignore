@@ -37,6 +37,7 @@ examples/synth_engine/synth_cli
 examples/pico/pico_host_cli
 examples/pico/pico_device_sim
 adapters/beam/srr_port_driver
+tools/srr_cli
 
 # Core dumps, valgrind artifacts, and logs
 core

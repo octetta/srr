@@ -18,7 +18,7 @@ TEST_BINS := $(TEST_SRCS:.c=)
 
 # Default target displays help
 .DEFAULT_GOAL := help
-.PHONY: help all lib examples beam win32 test test-valgrind test-adapters test-all bench clean
+.PHONY: help all lib examples tools beam win32 test test-valgrind test-adapters test-all bench clean
 
 # ------------------------------------------------------------------------------
 # Help Target
@@ -54,7 +54,7 @@ help:
 # Core Build Recipes
 # ------------------------------------------------------------------------------
 
-all: lib examples beam
+all: lib examples tools beam
 
 lib: $(LIB)
 
@@ -65,7 +65,7 @@ $(LIB): $(OBJ)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # ------------------------------------------------------------------------------
-# Examples & Adapters
+# Examples, Tools & Adapters
 # ------------------------------------------------------------------------------
 
 examples: $(LIB)
@@ -73,6 +73,9 @@ examples: $(LIB)
 	$(CC) $(CFLAGS) examples/synth_engine/synth_cli.c -L. -lsrr -o examples/synth_engine/synth_cli
 	$(CC) $(CFLAGS) examples/pico/pico_device_sim.c -L. -lsrr -o examples/pico/pico_device_sim
 	$(CC) $(CFLAGS) examples/pico/pico_host_cli.c -L. -lsrr -o examples/pico/pico_host_cli
+
+tools: $(LIB)
+	$(CC) $(CFLAGS) tools/srr_cli.c -L. -lsrr -o tools/srr_cli
 
 beam: $(LIB)
 	$(CC) $(CFLAGS) adapters/beam/src/srr_port_driver.c -L. -lsrr -o adapters/beam/srr_port_driver
@@ -163,6 +166,7 @@ clean:
 	rm -f benchmarks/bench_srr benchmarks/*.exe
 	rm -f examples/synth_engine/synth_server examples/synth_engine/synth_cli
 	rm -f examples/pico/pico_device_sim examples/pico/pico_host_cli
+	rm -f tools/srr_cli
 	rm -f adapters/beam/srr_port_driver
 	rm -f $(LIB) libsrr_win32.a vgcore.* core.* *.log
 	@echo "Clean completed."
