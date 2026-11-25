@@ -58,6 +58,13 @@ jobs:
             exit $RC
           fi
 
+      - name: Upload TSan log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tsan-log
+          path: tsan.log
+
       - name: Run cross-language protocol conformance
         run: make test-conformance
 

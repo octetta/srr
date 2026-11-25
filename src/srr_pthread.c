@@ -260,7 +260,7 @@ srr_status_t srr_receive(
             req->next = NULL;
             channel->q_count--;
 
-            if (req->type == SRR_ITEM_REQUEST && req->backend == SRR_BACKEND_THREAD) {
+            if (req->type == SRR_ITEM_REQUEST) {
                 pthread_mutex_lock(&req->lock);
                 if (req->state >= SRR_STATE_REPLIED) {
                     pthread_mutex_unlock(&req->lock);
@@ -269,8 +269,6 @@ srr_status_t srr_receive(
                 }
                 req->state = SRR_STATE_DELIVERED;
                 pthread_mutex_unlock(&req->lock);
-            } else if (req->type == SRR_ITEM_REQUEST) {
-                req->state = SRR_STATE_DELIVERED;
             }
 
             pthread_mutex_unlock(&channel->lock);
