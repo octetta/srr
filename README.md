@@ -15,6 +15,15 @@
 
 ---
 
+## Documentation
+
+- **[Getting Started Guide](docs/GETTING_STARTED.md):** Step-by-step tutorial on thread-to-thread and cross-process messaging.
+- **[C API Reference](docs/API_REFERENCE.md):** Detailed function signatures, lifecycle states, options, and error codes.
+- **[Architecture Specification](docs/ARCHITECTURE.md):** Deep dive into the transaction state machine, binary wire framing, and cross-platform IPC mechanics.
+- **[Original Design Proposal](srr-architecture-and-differentiation.md):** Initial architecture and differentiation rationale.
+
+---
+
 ## Architecture Overview
 
 ```text

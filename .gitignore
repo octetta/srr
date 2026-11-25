@@ -1,17 +1,58 @@
+# Compiled objects, static and dynamic libraries
 *.o
+*.obj
+*.win.o
 *.a
+*.lib
+*.so
+*.dylib
+*.dll
 *.exe
+
+# Root libraries
 libsrr.a
 libsrr_win32.a
+
+# Test executables
 tests/test_srr_basic
 tests/test_srr_races
 tests/test_srr_stress
 tests/test_srr_ipc
+tests/test_srr_win32_pipe
 tests/*.exe
+
+# Benchmark executables
 benchmarks/bench_srr
+benchmarks/*.exe
+
+# Example and adapter executables
 examples/synth_engine/synth_server
 examples/synth_engine/synth_cli
 adapters/beam/srr_port_driver
-__pycache__/
+
+# Core dumps, valgrind artifacts, and logs
+core
+core.*
+vgcore.*
+*.log
+
+# Sockets and temporary runtime files
 *.sock
+/tmp/srr_*.sock
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Elixir / Erlang build artifacts
+_build/
+deps/
+*.beam
+.fetch
+erl_crash.dump
+
+# OS metadata
 .DS_Store
+Thumbs.db
