@@ -54,21 +54,7 @@ jobs:
         run: make test-conformance
 
       - name: Run language adapter integration tests
-        run: |
-          set +e
-          make test-adapters > /tmp/adapters.txt 2>&1
-          RC=$?
-          cat /tmp/adapters.txt
-          if [ $RC -ne 0 ]; then
-            git config user.name "github-actions"
-            git config user.email "github-actions@github.com"
-            git checkout -B debug-adapters
-            cp /tmp/adapters.txt debug_adapters_output.txt
-            git add debug_adapters_output.txt
-            git commit -m "debug: adapters failure log"
-            git push -f origin debug-adapters
-            exit $RC
-          fi
+        run: make test-adapters
 
       - name: Run scripting automation tests
         run: make test-scripts

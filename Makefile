@@ -169,16 +169,19 @@ test-asan:
 	@echo "--- Building and Running with AddressSanitizer & UndefinedBehaviorSanitizer ---"
 	$(MAKE) clean
 	$(MAKE) CC="$(CC)" CFLAGS="$(CFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer -g" test
+	$(MAKE) clean
 
 test-tsan:
 	@echo "--- Building and Running with ThreadSanitizer ---"
 	$(MAKE) clean
 	$(MAKE) CC="$(CC)" CFLAGS="$(CFLAGS) -fsanitize=thread -fno-omit-frame-pointer -g" test
+	$(MAKE) clean
 
 test-ubsan:
 	@echo "--- Building and Running with UndefinedBehaviorSanitizer ---"
 	$(MAKE) clean
 	$(MAKE) CC="$(CC)" CFLAGS="$(CFLAGS) -fsanitize=undefined -fno-omit-frame-pointer -g" test
+	$(MAKE) clean
 
 test-conformance: $(LIB)
 	@echo "--- Running Protocol Conformance Test Vectors ---"
