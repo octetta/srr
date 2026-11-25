@@ -49,7 +49,8 @@ static int echo_service_handler(
 
 typedef struct {
     int server_fd;
-    volatile bool running;
+    pthread_mutex_t lock;
+    bool running;
     srr_endpoint_t ep;
     uint8_t rx_buf[1024];
     uint8_t dec_buf[1024];
@@ -60,7 +61,12 @@ typedef struct {
 static void* server_thread_fn(void *arg) {
     server_thread_ctx_t *ctx = (server_thread_ctx_t *)arg;
     uint8_t ch;
-    while (ctx->running) {
+    while (1) {
+        pthread_mutex_lock(&ctx->lock);
+        bool run = ctx->running;
+        pthread_mutex_unlock(&ctx->lock);
+        if (!run) break;
+
         ssize_t n = read(ctx->server_fd, &ch, 1);
         if (n <= 0) break; /* Closed or error */
         srr_endpoint_feed_byte(&ctx->ep, ch);
@@ -79,6 +85,7 @@ static void test_serial_roundtrip_and_pulse(void) {
     server_thread_ctx_t srv_ctx;
     memset(&srv_ctx, 0, sizeof(srv_ctx));
     srv_ctx.server_fd = fds[1];
+    pthread_mutex_init(&srv_ctx.lock, NULL);
     srv_ctx.running = true;
 
     rc = srr_endpoint_init(
@@ -130,9 +137,12 @@ static void test_serial_roundtrip_and_pulse(void) {
     printf("  One-way pulse sent successfully.\n");
 
     /* Teardown */
+    pthread_mutex_lock(&srv_ctx.lock);
     srv_ctx.running = false;
+    pthread_mutex_unlock(&srv_ctx.lock);
     shutdown(fds[1], SHUT_RDWR);
     pthread_join(th, NULL);
+    pthread_mutex_destroy(&srv_ctx.lock);
     close(fds[1]);
     srr_serial_close(client_port);
 }

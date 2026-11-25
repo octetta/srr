@@ -130,12 +130,18 @@ static void test_resolver_text_protocol(void) {
 typedef struct {
     srr_channel_t  *chan;
     srr_resolver_t *res;
-    volatile bool   running;
+    pthread_mutex_t lock;
+    bool            running;
 } server_thread_ctx_t;
 
 static void* resolver_server_thread(void *arg) {
     server_thread_ctx_t *ctx = (server_thread_ctx_t *)arg;
-    while (ctx->running) {
+    while (1) {
+        pthread_mutex_lock(&ctx->lock);
+        bool run = ctx->running;
+        pthread_mutex_unlock(&ctx->lock);
+        if (!run) break;
+
         srr_request_t *req = NULL;
         srr_status_t st = srr_receive(ctx->chan, &req);
         if (st == SRR_OK && req) {
@@ -162,6 +168,7 @@ static void test_resolver_ipc_roundtrip(void) {
         .res = res,
         .running = true
     };
+    pthread_mutex_init(&ctx.lock, NULL);
 
     pthread_t th;
     pthread_create(&th, NULL, resolver_server_thread, &ctx);
@@ -208,9 +215,12 @@ static void test_resolver_ipc_roundtrip(void) {
     assert(srr_resolve(svc_name, "audio-synth", &out, 1000) != SRR_OK);
 
     /* Shutdown server */
+    pthread_mutex_lock(&ctx.lock);
     ctx.running = false;
+    pthread_mutex_unlock(&ctx.lock);
     srr_channel_close(chan);
     pthread_join(th, NULL);
+    pthread_mutex_destroy(&ctx.lock);
     srr_channel_destroy(chan);
     srr_resolver_destroy(res);
 

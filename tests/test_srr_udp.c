@@ -14,14 +14,20 @@
 
 typedef struct {
     srr_udp_endpoint_t *srv_ep;
-    volatile bool running;
+    pthread_mutex_t lock;
+    bool running;
 } udp_srv_ctx_t;
 
 static void* udp_server_thread(void *arg) {
     udp_srv_ctx_t *ctx = (udp_srv_ctx_t *)arg;
     uint8_t payload[256];
 
-    while (ctx->running) {
+    while (1) {
+        pthread_mutex_lock(&ctx->lock);
+        bool run = ctx->running;
+        pthread_mutex_unlock(&ctx->lock);
+        if (!run) break;
+
         srr_wire_header_t hdr;
         size_t actual_len = 0;
         srr_udp_peer_t *peer = NULL;
@@ -49,6 +55,7 @@ static void test_udp_roundtrip_and_pulse(void) {
     assert(srv != NULL);
 
     udp_srv_ctx_t srv_ctx = { .srv_ep = srv, .running = true };
+    pthread_mutex_init(&srv_ctx.lock, NULL);
     pthread_t th;
     pthread_create(&th, NULL, udp_server_thread, &srv_ctx);
 
@@ -81,8 +88,11 @@ static void test_udp_roundtrip_and_pulse(void) {
     printf("  UDP Request timeout (100ms) verified.\n");
 
     /* Teardown */
+    pthread_mutex_lock(&srv_ctx.lock);
     srv_ctx.running = false;
+    pthread_mutex_unlock(&srv_ctx.lock);
     pthread_join(th, NULL);
+    pthread_mutex_destroy(&srv_ctx.lock);
     srr_udp_close(cli);
     srr_udp_close(srv);
 }
