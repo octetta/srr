@@ -1,175 +1,219 @@
 # SRR: Synchronous Message Passing for Portable Concurrent Systems
 
-> **SRR brings a QNX-inspired Send / Receive / Reply service model to ordinary C programs, natively across threads and across local processes without changing the service programming contract.**
+SRR provides a synchronous **Send / Receive / Reply** service communication model for C99 programs, operating uniformly across in-process threads, local inter-process communication (IPC), serial links, and resource-constrained microcontrollers.
 
 ---
 
-## Highlights
+## Key Highlights
 
-- **Blocking Transaction Semantics:** A client calls `srr_send()` and blocks until the server executes `srr_reply()` or a terminal condition occurs (timeout, disconnect, server died).
-- **Single-Winner Resolution:** Concurrent reply, timeout, disconnect, and teardown paths are strictly synchronized—a transaction never completes twice.
-- **Unified Programming Model:** The identical C API operates between in-process threads (`pthreads`) and across processes (POSIX Unix Domain Sockets & Windows Named Pipes).
-- **Microsecond Latency:** ~6.6 µs median in-process round-trip latency; up to **447,000 transactions/sec** on multi-core systems.
-- **Zero Leaks:** 100% verified under Valgrind and ThreadSanitizer with zero memory leaks and zero race conditions.
-- **Language Adapters:** Native BEAM (Erlang `gen_server` and Elixir) integration and WebSocket Browser gateway.
-
----
-
-## Documentation
-
-- **[Getting Started Guide](docs/GETTING_STARTED.md):** Step-by-step tutorial on thread-to-thread and cross-process messaging.
-- **[C API Reference](docs/API_REFERENCE.md):** Detailed function signatures, lifecycle states, options, and error codes.
-- **[Architecture Specification](docs/ARCHITECTURE.md):** Deep dive into the transaction state machine, binary wire framing, and cross-platform IPC mechanics.
-- **[Original Design Proposal](srr-architecture-and-differentiation.md):** Initial architecture and differentiation rationale.
+- **Predictable Control-Plane Transactions:** A client initiates a transaction with `srr_send()` (or `srr_send_timed()`) and blocks until the server answers with `srr_reply()` or a terminal state occurs (timeout, disconnect, channel closure).
+- **Single-Winner Resolution:** Concurrent race paths between replies, timeouts, peer disconnections, and channel shutdown are strictly synchronized—a transaction never completes twice.
+- **Three-Tier Architecture:** Complete separation between transaction state logic, wire framing/serialization, and platform execution backends.
+- **Zero-Heap Embedded Profiles:** Dedicated profiles for microcontrollers (RP2040 Pico, AVR ATmega328P, ESP32, and Parallax Propeller P1) operating entirely on caller-provided static buffers without dynamic heap allocation.
+- **Empirical Performance:** Median round-trip latency of **6.7 µs** in-process, up to **446,000 transactions/sec** on multi-threaded workloads, and **2.78 Million frames/sec** COBS framing throughput.
+- **Zero Leaks & Race-Free:** 100% verified across 10 test suites under Valgrind with zero memory leaks and zero errors.
 
 ---
 
-## Architecture Overview
+## Architectural Boundaries
 
 ```text
-                     Public C API (include/srr/srr.h)
-                                    |
-                    Core Transaction State Machine
-                (Single-winner, bounded queue, lifetimes)
-                                    |
-                  +-----------------+-----------------+
-                  |                                   |
-           pthread Backend                       IPC Backend
-        (In-Process Queues)            (Framed Streaming Protocol)
-                  |                                   |
-         Pthread Mutex / CV              +------------+------------+
-                                         |                         |
-                                       POSIX                    Windows
-                                (Unix Domain Sockets)        (Named Pipes)
-```
-
-### Transaction State Machine
-
-```text
-CREATED
-   |
-   v
-QUEUED
-   |
-   v
-DELIVERED
-   |
-   +------> REPLIED ------> COMPLETED
-   |
-   +------> CANCELLED
-   |
-   +------> TIMED_OUT
-   |
-   +------> DISCONNECTED
-   |
-   +------> SERVER_DIED
-   |
-   +------> ERROR
++-------------------------------------------------------------------------------+
+|                               1. SRR Core Layer                               |
+|   - Channels, Connections, Requests, Replies, and Pulses                      |
+|   - Single-winner transaction state machine & lifetime management             |
+|   - Bounded queues and backpressure signaling (SRR_QUEUE_FULL)                |
++-------------------------------------------------------------------------------+
+                                        |
+       +--------------------------------+-------------------------------+
+       |                                                                |
++------------------------------------+  +-----------------------------------------------+
+|     2. Execution Backends          |  |         3. Wire & Framing Layer               |
+|  - POSIX Threads (pthreads)        |  |  - COBS byte stuffing (0x00 delimiter)        |
+|  - POSIX IPC (Unix Domain Sockets) |  |  - CRC-16-CCITT integrity verification        |
+|  - Windows IPC (Named Pipes)       |  |  - Explicit Little-Endian field packing       |
+|  - Embedded Cooperative Engine     |  |  - Streaming chunk parser (zero heap alloc)   |
+|  - AVR Tiny Profile (ATmega328P)   |  +-----------------------------------------------+
+|  - ESP32 FreeRTOS Task Adapter     |                          |
+|  - Parallax P1 Multi-Cog Hub RAM   |                  Physical Transports
++------------------------------------+          (Serial UART, USB CDC, Loopback)
 ```
 
 ---
 
-## Quickstart
+## Embedded Profile Matrix
 
-### Server
+| Profile | Target Platforms | Concurrency Model | Dynamic Heap | Static RAM Footprint | Code Size (.text) | Max Payload |
+|---|---|---|:---:|:---:|:---:|:---:|
+| **Full** | Linux, macOS, Windows | `pthread` / Win32 | Optional (at init) | ~14 KB | ~18 KB | Configurable |
+| **Compact** | RP2040 Raspberry Pi Pico | Cooperative main-loop | **Zero** | ~2 KB | ~4.1 KB | 512 B |
+| **Tiny** | AVR ATmega328P (Arduino) | Cooperative main-loop | **Zero** | **~392 Bytes** | **~2.8 KB** | 32 B |
+| **RTOS** | ESP32 (ESP-IDF) | FreeRTOS tasks/mutexes | Task Stack | ~8 KB | ~2.7 KB | Configurable |
+| **Multi-Cog**| Parallax Propeller P1 | 8-Cog Hub RAM mailbox | **Zero** | **~1.1 KB** | **~2.5 KB** | 64 B |
+
+---
+
+## Performance Benchmarks (-O3, Linux x86_64)
+
+Empirical measurements gathered from `make bench` (`benchmarks/bench_srr.c`):
+
+| Benchmark Scenario | Payload / Configuration | Throughput | Median (p50) | 95th Percentile | 99th Percentile |
+|---|---|:---:|:---:|:---:|:---:|
+| **Pthreads In-Process** | 1 Client -> 1 Server (64B) | **142,407 ops/s** | **6.73 µs** | 7.75 µs | 14.95 µs |
+| **Pthreads Multi-Threaded** | 4 Clients -> 4 Servers (64B) | **446,213 ops/s** | **7.65 µs** | 15.83 µs | 23.07 µs |
+| **Unix Domain Sockets (IPC)**| 1 Client -> 1 Server (64B) | **54,591 ops/s** | **16.99 µs** | 24.45 µs | 31.84 µs |
+| **Queue-Full Rejection** | Saturated Queue (Capacity 32) | **12,938,562 ops/s** | **0.04 µs (40 ns)**| 0.08 µs | 0.32 µs |
+| **Wire Frame Encoding** | Header (32B) + Payload (64B) + CRC | **2,783,205 frames/s**| **0.34 µs (340 ns)**| 0.34 µs | 0.36 µs |
+| **Wire Streaming Parser** | 1-Byte Chunk Incremental Feed | **2,004,487 frames/s**| **0.47 µs (470 ns)**| 0.48 µs | 1.12 µs |
+| **Serial Full-Duplex Link** | 32B Payload End-to-End | **9,840 ops/s** | **94.94 µs** | 153.30 µs | 209.51 µs |
+
+---
+
+## Quickstart Examples
+
+### 1. In-Process & Cross-Process IPC (POSIX & Windows)
+
 ```c
 #include <stdio.h>
 #include <string.h>
 #include "srr/srr.h"
 
-int main(void) {
-    srr_channel_t *channel = NULL;
-    // Binds in-process channel (or cross-process if service_name is set)
-    srr_channel_create_service("echo_svc", NULL, &channel);
+/* Server */
+void run_server(void) {
+    srr_channel_t *chan = NULL;
+    srr_channel_create_service("echo_service", NULL, &chan);
 
     srr_request_t *req = NULL;
-    while (srr_receive(channel, &req) == SRR_OK) {
+    while (srr_receive(chan, &req) == SRR_OK) {
         if (srr_request_is_pulse(req)) {
-            printf("Pulse code=%u value=%lu\n", srr_pulse_code(req), (unsigned long)srr_pulse_value(req));
+            printf("Received pulse: code=%u val=%lu\n",
+                   srr_pulse_code(req), (unsigned long)srr_pulse_value(req));
             srr_request_dispose(req);
             continue;
         }
 
         const char *data = (const char *)srr_request_data(req);
         char reply[128];
-        snprintf(reply, sizeof(reply), "ECHO: %s", data);
-
-        // Synchronously replies to client and unblocks client's srr_send()
+        snprintf(reply, sizeof(reply), "ACK: %s", data);
         srr_reply(req, reply, strlen(reply) + 1);
     }
-
-    srr_channel_destroy(channel);
-    return 0;
+    srr_channel_destroy(chan);
 }
-```
 
-### Client
-```c
-#include <stdio.h>
-#include <string.h>
-#include "srr/srr.h"
-
-int main(void) {
+/* Client */
+void run_client(void) {
     srr_connection_t *conn = NULL;
-    srr_connect("echo_svc", NULL, &conn);
+    srr_connect("echo_service", NULL, &conn);
 
-    const char *msg = "hello world";
-    char reply[128] = {0};
-    size_t reply_sz = 0;
-
-    // Blocks until server replies or 1000ms timeout expires
-    srr_status_t status = srr_send_timed(conn, msg, strlen(msg) + 1, reply, sizeof(reply), &reply_sz, 1000);
-
-    if (status == SRR_OK) {
+    char reply[128];
+    size_t reply_len = 0;
+    srr_status_t st = srr_send_timed(conn, "HELLO", 6, reply, sizeof(reply), &reply_len, 1000);
+    if (st == SRR_OK) {
         printf("Server replied: %s\n", reply);
-    } else {
-        printf("Failed: %s\n", srr_status_str(status));
     }
 
-    // Send an asynchronous one-way notification pulse
-    srr_pulse(conn, 1, 42);
+    /* Fire-and-forget asynchronous notification */
+    srr_pulse(conn, 1, 100);
 
     srr_disconnect(conn);
+}
+```
+
+### 2. Zero-Heap Microcontroller Endpoint (RP2040 Pico / Bare Metal)
+
+```c
+#include "srr_embedded.h"
+
+static int device_info_handler(uint16_t svc, uint16_t op, const uint8_t *req, size_t req_len,
+                               uint8_t *reply, size_t cap, size_t *out_len, void *ud) {
+    (void)svc; (void)op; (void)req; (void)req_len; (void)ud;
+    const char *info = "RP2040-PICO-1.0";
+    size_t len = strlen(info);
+    if (cap < len) return -1;
+    memcpy(reply, info, len);
+    *out_len = len;
     return 0;
+}
+
+int main(void) {
+    /* Statically allocated buffers - zero dynamic memory */
+    static uint8_t rx[512], dec[512], tx[512], rep[512];
+    srr_endpoint_t ep;
+
+    srr_endpoint_init(&ep, 0x1001, uart_write_bytes, NULL,
+                      rx, sizeof(rx), dec, sizeof(dec),
+                      tx, sizeof(tx), rep, sizeof(rep));
+
+    srr_endpoint_register_service(&ep, 1, device_info_handler, NULL);
+
+    while (1) {
+        int b = uart_read_byte();
+        if (b >= 0) {
+            srr_endpoint_feed_byte(&ep, (uint8_t)b);
+        }
+    }
 }
 ```
 
 ---
 
-## Benchmarks (-O3, 64-byte payload)
+## Command-Line Tool (`tools/srr_cli`)
 
-| Scenario | Throughput | p50 (Median) | p95 | p99 |
-|---|---|---|---|---|
-| **In-Process `pthread`** *(1 Client $\rightarrow$ 1 Server)* | **144,364 ops/sec** | **6.63 µs** | 8.71 µs | 14.76 µs |
-| **In-Process Multi-Core** *(4 Clients $\rightarrow$ 4 Servers)* | **447,262 ops/sec** | **7.62 µs** | 15.53 µs | 22.31 µs |
-| **Process IPC / UDS** *(1 Client $\rightarrow$ 1 Server)* | **55,055 ops/sec** | **16.75 µs** | 24.87 µs | 32.48 µs |
-
----
-
-## Adapters & Integrations
-
-- **BEAM (Erlang / OTP):** [adapters/beam/src/srr_client.erl](adapters/beam/src/srr_client.erl) provides a native `gen_server` mapping `call/3` directly to SRR transactions over Unix Domain Sockets.
-- **BEAM Port Driver:** [adapters/beam/src/srr_port_driver.c](adapters/beam/src/srr_port_driver.c) provides a standard `{packet, 4}` port process for Erlang/Elixir supervisors.
-- **Elixir Package:** [adapters/elixir/](adapters/elixir/) provides idiomatic Hex package structure (`SRR.start_link/2`, `SRR.call/3`, `SRR.pulse/3`).
-- **Browser WebAudio Gateway:** [gateway/](gateway/) provides a zero-dependency WebSocket gateway and interactive WebAudio dashboard with keyboard controls.
-
----
-
-## Building and Testing
+SRR includes a developer CLI for querying, benchmarking, and interacting with endpoints:
 
 ```bash
-# Build static library libsrr.a, CLI examples, and BEAM port driver
+# Query device information from simulated Pico endpoint
+./tools/srr_cli --sim info
+
+# Ping simulated microcontroller endpoint
+./tools/srr_cli --sim ping
+
+# Send synchronous request over IPC to synthesizer server
+./tools/srr_cli --ipc srr_synth req 0 0 "SET cutoff 2200.0"
+
+# Send asynchronous pulse over physical serial port
+./tools/srr_cli --serial /dev/ttyACM0 --baud 115200 pulse 10 1 ALARM
+```
+
+---
+
+## Building and Verification
+
+```bash
+# Build static library libsrr.a, examples, CLI tools, and BEAM port driver
 make all
 
-# Run complete unit test suite (basic, timeout/races, multi-client stress, cross-process fork)
+# Run all 10 native unit and integration test suites
 make test
 
-# Run Valgrind memory leak verification
+# Run all 10 test suites under Valgrind (0 errors, 0 memory leaks check)
 make test-valgrind
 
-# Run performance microbenchmarks (-O3)
+# Run BEAM (Erlang/Elixir) and WebAudio WebSocket gateway integration tests
+make test-adapters
+
+# Execute complete verification suite
+make test-all
+
+# Run nanosecond microbenchmark suite with -O3
 make bench
 
-# Cross-compile for Windows (MinGW Named Pipes)
+# Cross-compile Windows library (libsrr_win32.a) and executables via MinGW
 make win32
 ```
+
+---
+
+## Documentation Index
+
+- **[Getting Started Guide](docs/GETTING_STARTED.md):** Introductory tutorial covering threads, IPC, BEAM, and WebAudio.
+- **[C API Reference](docs/API_REFERENCE.md):** Exhaustive function reference for Core, Wire, Serial, and Embedded APIs.
+- **[Architecture Specification](docs/ARCHITECTURE.md):** Detailed state machine and transport engineering guide.
+- **[Performance & Benchmark Report](docs/SRR_BENCHMARKS.md):** Detailed latency distributions, throughput tables, and memory analysis.
+- **[Embedded Profiles Specification](docs/SRR_EMBEDDED_PROFILES.md):** Detailed resource budgets and build guides for AVR Tiny and ESP32.
+- **[Parallax Propeller P1 Multi-Cog Architecture](docs/SRR_PROPELLER_P1.md):** Shared Hub RAM and Cog mailbox arbitration design.
+- **[Wire Protocol Specification](docs/SRR_WIRE_PROTOCOL.md):** Binary framing, COBS encoding, and CRC-16-CCITT algorithm definition.
+- **[Formal API Specification](docs/SRR_API_SPEC.md):** Behavioral contracts, ownership semantics, and concurrency rules.
+- **[Architectural Decisions Log](docs/SRR_DECISIONS.md):** Key design choices, trade-offs, and resolutions.
+- **[Test Plan & Verification Matrix](docs/SRR_TEST_PLAN.md):** Concurrency, race, fuzzing, and fault-injection matrix.
+- **[Implementation Roadmap](docs/SRR_IMPLEMENTATION_PLAN.md):** Phased milestone breakdown across stages.
