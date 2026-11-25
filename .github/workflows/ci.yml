@@ -48,27 +48,7 @@ jobs:
         run: make test-asan
 
       - name: Run ThreadSanitizer
-        run: |
-          set +e
-          make test-tsan > /tmp/tsan.txt 2>&1
-          RC=$?
-          cat /tmp/tsan.txt
-          if [ $RC -ne 0 ]; then
-            exit $RC
-          fi
-
-      - name: Push TSan log on failure
-        if: failure()
-        run: |
-          if [ -f /tmp/tsan.txt ]; then
-            git config user.name "github-actions"
-            git config user.email "github-actions@github.com"
-            git checkout -B debug-tsan
-            cp /tmp/tsan.txt debug_tsan_output.txt
-            git add debug_tsan_output.txt
-            git commit -m "debug: tsan failure log"
-            git push -f origin debug-tsan
-          fi
+        run: make test-tsan
 
       - name: Run cross-language protocol conformance
         run: make test-conformance

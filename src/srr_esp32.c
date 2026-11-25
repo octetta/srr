@@ -275,7 +275,12 @@ static int host_uart_tx(const uint8_t *data, size_t len, void *user_data) {
 static void* host_uart_worker(void *arg) {
     srr_esp32_device_t *dev = (srr_esp32_device_t *)arg;
     uint8_t ch;
-    while (dev->running) {
+    while (1) {
+        pthread_mutex_lock(&dev->trans_mutex);
+        bool run = dev->running;
+        pthread_mutex_unlock(&dev->trans_mutex);
+        if (!run) break;
+
         ssize_t n = read(dev->pipe_fds[0], &ch, 1);
         if (n <= 0) {
             usleep(1000);
@@ -466,7 +471,9 @@ int srr_esp32_pulse(srr_esp32_device_t *dev, uint16_t service_id, uint16_t opera
 
 void srr_esp32_destroy(srr_esp32_device_t *dev) {
     if (!dev) return;
+    pthread_mutex_lock(&dev->trans_mutex);
     dev->running = false;
+    pthread_mutex_unlock(&dev->trans_mutex);
     if (dev->pipe_fds[1] >= 0) {
         close(dev->pipe_fds[1]);
         dev->pipe_fds[1] = -1;
