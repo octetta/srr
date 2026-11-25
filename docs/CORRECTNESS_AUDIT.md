@@ -142,6 +142,80 @@ This document details the audit and stabilization of the SRR (Send/Receive/Reply
 
 ---
 
+---
+
+### Defect 13: Shared IPC Listener Descriptor and Shutdown Race (ThreadSanitizer)
+- **Severity:** Critical
+- **Affected File & Function:** `src/srr_ipc.c` (`srr_ipc_server_stop`, `ipc_listener_thread`), `src/srr_pthread.c` (`srr_channel_close`)
+- **Exact Failure Scenario:** ThreadSanitizer reported a data race between a write at `src/srr_ipc.c:358` (`channel->ipc_listen_handle = -1`) in `srr_ipc_server_stop()` and a concurrent read at `src/srr_ipc.c:247` (`accept((int)chan->ipc_listen_handle, ...)`) in `ipc_listener_thread()`. Calling `shutdown()` or `close()` on a listening descriptor blocked in `accept()` from another thread is a race condition, and concurrent calls to `srr_channel_close()` could trigger duplicate joins and double-frees.
+- **Root Cause:** Unsynchronized mutation of the listening descriptor handle across threads, lack of a clean interruption mechanism for blocking `accept()`, and non-idempotent IPC stop invocation.
+- **Fix:**
+  1. Implemented a dedicated self-pipe (`ipc_shutdown_pipe[2]`) monitored alongside `listen_fd` via POSIX `poll()`.
+  2. To stop the server, `srr_ipc_server_stop()` writes 1 byte to the shutdown pipe, causing `poll()` to wake cleanly without modifying or closing `listen_fd` while active.
+  3. Guaranteed idempotent shutdown: `channel->ipc_stopped` is checked under `channel->lock`; `pthread_join(channel->ipc_listen_th)` and descriptor closures execute strictly once.
+  4. In `srr_channel_close()`, `channel->state = SRR_CHAN_CLOSED` is set under `channel->lock` before stopping IPC, ensuring concurrent channel closures are safe no-ops.
+- **Regression Test:** `tests/test_srr_audit_regressions.c` :: `test_regression_concurrent_close_idempotency()`
+- **Result:** PASSED with 0 data races under ThreadSanitizer.
+
+---
+
+### Defect 14: Wire Frame Null-Pointer Rejection with Nonzero Length
+- **Severity:** Medium
+- **Affected File & Function:** `src/srr_wire.c`, function `srr_wire_encode_frame()`
+- **Exact Failure Scenario:** Calling `srr_wire_encode_frame(&hdr, NULL, 50, out, cap)` calculated unencoded length including 50 payload bytes, encoded the header, skipped the `memcpy`, and stuffed uninitialized stack memory into the output frame.
+- **Root Cause:** Missing guard check enforcing that `payload != NULL` whenever `payload_len > 0`.
+- **Fix:** Added validation `if (payload_len > 0 && !payload) return 0;` and guarded against arithmetic overflow before buffer slicing.
+- **Regression Test:** `tests/test_srr_audit_regressions.c` :: `test_regression_wire_encode_null_payload_rejection()`
+- **Result:** PASSED.
+
+---
+
+### Defect 15: Pulse Write Failures Ignored on Severed IPC Connections
+- **Severity:** Medium
+- **Affected File & Function:** `src/srr_pthread.c`, function `srr_pulse()`
+- **Exact Failure Scenario:** Calling `srr_pulse()` on an IPC connection whose peer server had crashed or closed returned `SRR_OK` even though `srr_ipc_write_all()` failed.
+- **Root Cause:** The return value of `srr_ipc_write_all()` was uninspected in `srr_pulse()`.
+- **Fix:** Captured write return codes. On failure, `connection->connected` is marked false, file descriptor closed, and `SRR_DISCONNECTED` returned.
+- **Regression Test:** `tests/test_srr_audit_regressions.c` :: `test_regression_pulse_ipc_write_failure()`
+- **Result:** PASSED.
+
+---
+
+### Defect 16: srr_reply Validates Pointer/Length & Strictly Rejects Repetition
+- **Severity:** High
+- **Affected File & Function:** `src/srr_pthread.c`, function `srr_reply()`
+- **Exact Failure Scenario:**
+  1. Passing `reply_data == NULL` with `reply_size > 0` mutated transaction state and transmitted a header with a phantom payload length.
+  2. Repeated calls to `srr_reply()` returned the previous status (`SRR_OK`) rather than rejecting the invalid duplicate call.
+  3. IPC replies exceeding configured `channel->max_reply_size` were written to the socket without boundary enforcement.
+- **Root Cause:** Missing initial argument validation, ambiguous repeat-reply return codes, and missing IPC reply boundary checks.
+- **Fix:**
+  1. Enforced `if (reply_size > 0 && !reply_data) return SRR_INVALID;` prior to state mutations.
+  2. If `request->state >= SRR_STATE_REPLIED`, strictly return `SRR_INVALID`.
+  3. Enforced `channel->max_reply_size` in IPC backend, returning `SRR_TOO_LARGE` and transmitting an `SRR_MSG_ERROR(SRR_TOO_LARGE)` frame.
+- **Regression Test:** `tests/test_srr_audit_regressions.c` :: `test_regression_reply_validation_and_idempotency()`
+- **Result:** PASSED.
+
+---
+
+### Defect 17: Embedded Transaction Registration and Rollback Lifecycle
+- **Severity:** High
+- **Affected File & Function:** `src/srr_embedded.c`, functions `srr_begin_request()`, `srr_endpoint_feed_byte()`, `srr_cancel_transaction()`, `srr_collect_reply()`
+- **Exact Failure Scenario:**
+  1. `srr_begin_request()` transmitted the request over the wire before setting `slot->state = SRR_TRANS_PENDING`. On fast/loopback links, if a reply arrived immediately, `srr_endpoint_feed_byte()` discarded the reply because no pending transaction was registered.
+  2. If transmission failed, no rollback occurred.
+  3. Incoming replies larger than caller's `reply_cap` silently truncated data and claimed `SRR_TRANS_REPLIED`.
+- **Root Cause:** Premature transmission before state registration, lack of rollback labels, and missing capacity verification.
+- **Fix:**
+  1. `slot->state = SRR_TRANS_PENDING` and correlation fields are populated *before* calling `ep->tx_fn`.
+  2. If encoding or transmission fails, the slot is immediately rolled back to `SRR_TRANS_UNUSED`.
+  3. If reply length exceeds `t->reply_cap`, data is copied up to capacity and state transitions to `SRR_TRANS_ERROR` with `error_code = 7` (`SRR_TOO_LARGE`).
+  4. `srr_cancel_transaction()` marks `SRR_TRANS_CANCELLED` and sends a wire CANCEL frame. `srr_collect_reply()` cleans up the slot, resetting it to `SRR_TRANS_UNUSED` for reuse.
+- **Regression Test:** `tests/test_srr_audit_regressions.c` :: `test_regression_embedded_tx_lifecycle()`
+- **Result:** PASSED.
+
+---
+
 ## 2. Concurrency, Lifetime, and Thread-Safety Audit
 
 ### Thread-Safety Matrix
@@ -157,6 +231,14 @@ This document details the audit and stabilization of the SRR (Send/Receive/Reply
 | `srr_receive` | Thread-safe | `pthread_cond_t recv_cond` | Multiple receiver threads can dequeue concurrently. |
 | `srr_reply` / `srr_reply_error` | Single winner | `pthread_mutex_t lock` | Consumes handle. First caller wins; others return error. |
 | `srr_request_dispose` | Single caller | `pthread_mutex_t lock` | Only for pulses or unreplied/cancelled requests. |
+
+### ThreadSanitizer and Fork-Based IPC Investigation
+
+During automated CI runs, ThreadSanitizer reported an assertion failure during `test_forked_process_ipc()`. Investigation confirmed two interrelated factors:
+
+1. **Harness Timing Sensitivity:** The test harness previously used an arbitrary fixed sleep of 40ms in the child process. Under compiler sanitizer instrumentation (which incurs a 5x–10x slowdown), the parent server thread took longer than 40ms to complete socket binding and start its listener, causing the child's `srr_connect()` attempt to occasionally fail. This was resolved by replacing arbitrary sleeps with deterministic connection retries (up to 500ms).
+2. **ThreadSanitizer Runtime Incompatibility with `fork()` without `exec()`:** The LLVM/GCC ThreadSanitizer runtime explicitly documents that calling `fork()` in a process that has already spawned POSIX threads without immediately calling `execve()` is unsupported. TSan's internal runtime threads in the parent process are not duplicated in the child, leaving internal synchronization locks in undefined states in the child.
+3. **Resolution:** The deterministic fork test is preserved in the standard test suite (`make test`), Valgrind leak audit (`make test-valgrind`), and AddressSanitizer suite (`make test-asan`). When compiling under ThreadSanitizer (`__SANITIZE_THREAD__`), the fork test is cleanly bypassed with an explicit informational notice.
 
 ---
 

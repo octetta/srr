@@ -99,11 +99,21 @@ struct srr_channel {
 
     /* IPC State (Unix Domain Sockets on POSIX, Named Pipes on Windows) */
     bool               has_ipc;
+    bool               ipc_stopped;
     char              *ipc_path;
     intptr_t           ipc_listen_handle;
+    int                ipc_shutdown_pipe[2];
     pthread_t          ipc_listen_th;
     pthread_mutex_t    ipc_clients_lock;
     struct ipc_client_node *ipc_clients;
+};
+
+struct ipc_client_session {
+    srr_channel_t   *channel;
+    int              client_fd;
+    pthread_mutex_t  client_write_lock;
+    pthread_mutex_t  ref_lock;
+    int              ref_count;
 };
 
 struct srr_connection {

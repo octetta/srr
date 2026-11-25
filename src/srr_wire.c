@@ -163,14 +163,17 @@ size_t srr_wire_encode_frame(
     size_t out_cap)
 {
     if (!hdr || !out_frame) return 0;
-    size_t unencoded_len = SRR_HEADER_SIZE + payload_len + SRR_CRC_SIZE;
+    if (payload_len > 0 && !payload) return 0; /* Strictly reject nonzero length with NULL pointer */
 
-    /* Stack or scratch buffer for unencoded bytes (max 4096 on stack for embedded safety) */
-    uint8_t raw[1024];
-    uint8_t *raw_buf = raw;
-    if (unencoded_len > sizeof(raw)) {
+    /* Guard against integer overflow and excessive size */
+    if (payload_len > 1024 - SRR_HEADER_SIZE - SRR_CRC_SIZE) {
         return 0; /* Exceeds single frame scratch budget */
     }
+    size_t unencoded_len = SRR_HEADER_SIZE + payload_len + SRR_CRC_SIZE;
+
+    /* Stack scratch buffer for unencoded bytes */
+    uint8_t raw[1024];
+    uint8_t *raw_buf = raw;
 
     srr_wire_header_t local_hdr = *hdr;
     local_hdr.magic = SRR_WIRE_MAGIC;

@@ -195,6 +195,30 @@ def test_go_conformance():
     res = subprocess.run(["go", "test", "-v", "./..."], cwd=os.path.join(REPO_ROOT, "adapters", "go"), capture_output=True, text=True)
     assert res.returncode == 0, f"Go test failed:\n{res.stdout}\n{res.stderr}"
 
+def test_node_conformance():
+    if not shutil.which("node"):
+        print("UNVERIFIED (node interpreter not found on current host)")
+        return
+    res = subprocess.run(["node", "adapters/node/test/test_client.js"], cwd=REPO_ROOT, capture_output=True, text=True)
+    assert res.returncode == 0, f"Node.js conformance failed:\n{res.stdout}\n{res.stderr}"
+    print("PASS")
+
+def test_ruby_conformance():
+    if not shutil.which("ruby"):
+        print("UNVERIFIED (ruby interpreter not found on current host)")
+        return
+    res = subprocess.run(["ruby", "adapters/ruby/test/test_client.rb"], cwd=REPO_ROOT, capture_output=True, text=True)
+    assert res.returncode == 0, f"Ruby conformance failed:\n{res.stdout}\n{res.stderr}"
+    print("PASS")
+
+def test_php_conformance():
+    if not shutil.which("php"):
+        print("UNVERIFIED (php interpreter not found on current host)")
+        return
+    res = subprocess.run(["php", "adapters/php/tests/ProtocolTest.php"], cwd=REPO_ROOT, capture_output=True, text=True)
+    assert res.returncode == 0, f"PHP conformance failed:\n{res.stdout}\n{res.stderr}"
+    print("PASS")
+
 def main():
     print("================================================================================")
     print(" SRR PROTOCOL CONFORMANCE: CANONICAL TEST VECTORS")
@@ -207,7 +231,17 @@ def main():
     run_step("Python Adapter Conformance", lambda: test_python_conformance(vectors))
     run_step("Perl Adapter Conformance", lambda: test_perl_conformance(vectors))
     run_step("Go Adapter Conformance", test_go_conformance)
-    print("All available adapters passed 100% of canonical protocol test vectors!")
+
+    print("Testing Node.js Adapter Conformance... ", end="", flush=True)
+    test_node_conformance()
+
+    print("Testing Ruby Adapter Conformance... ", end="", flush=True)
+    test_ruby_conformance()
+
+    print("Testing PHP Adapter Conformance... ", end="", flush=True)
+    test_php_conformance()
+
+    print("Protocol conformance verification completed.")
 
 if __name__ == "__main__":
     main()

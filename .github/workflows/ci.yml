@@ -20,6 +20,9 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential \
             valgrind \
+            gcc-arm-none-eabi \
+            gcc-avr \
+            avr-libc \
             python3 \
             perl \
             nodejs \
@@ -52,3 +55,8 @@ jobs:
 
       - name: Run scripting automation tests
         run: make test-scripts
+
+      - name: Cross-compile embedded targets (Pico & AVR)
+        run: |
+          make pico
+          make avr

@@ -48,6 +48,14 @@ typedef void (*srr_pulse_handler_t)(
 /* Byte Transmission Callback (e.g. uart_write_blocking) */
 typedef int (*srr_tx_fn_t)(const uint8_t *data, size_t len, void *user_data);
 
+/*
+ * Concurrency & Thread-Safety:
+ * srr_endpoint_t is designed for single-threaded / cooperative bare-metal loops.
+ * If operations (e.g., srr_endpoint_feed_byte from a UART ISR and srr_begin_request
+ * from application code or multiple FreeRTOS tasks) can execute concurrently, the caller
+ * MUST provide external synchronization (e.g., mutex locking or critical section entry).
+ */
+
 /* Transaction State Machine */
 typedef enum {
     SRR_TRANS_UNUSED = 0,
@@ -60,6 +68,7 @@ typedef enum {
 
 typedef struct {
     uint64_t trans_id;
+    uint32_t session_id;
     srr_trans_state_t state;
     uint32_t timeout_at_ms;
     uint16_t service_id;

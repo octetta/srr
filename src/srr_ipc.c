@@ -79,14 +79,6 @@ int srr_ipc_read_all(intptr_t handle, void *buf, size_t len, int timeout_ms) {
     return 0;
 }
 
-struct ipc_client_session {
-    srr_channel_t   *channel;
-    int              client_fd;
-    pthread_mutex_t  client_write_lock;
-    pthread_mutex_t  ref_lock;
-    int              ref_count;
-};
-
 void srr_ipc_session_release(ipc_client_session_t *sess) {
     if (!sess) return;
     pthread_mutex_lock(&sess->ref_lock);
@@ -242,60 +234,81 @@ static void *ipc_client_session_thread(void *arg) {
 
 static void *ipc_listener_thread(void *arg) {
     srr_channel_t *chan = (srr_channel_t *)arg;
+    int listen_fd = (int)chan->ipc_listen_handle;
+    int pipe_rd = chan->ipc_shutdown_pipe[0];
+
+    struct pollfd pfds[2];
+    pfds[0].fd = listen_fd;
+    pfds[0].events = POLLIN;
+    pfds[1].fd = pipe_rd;
+    pfds[1].events = POLLIN;
 
     while (1) {
-        int client_fd = accept((int)chan->ipc_listen_handle, NULL, NULL);
-        if (client_fd < 0) {
+        int ret = poll(pfds, 2, -1);
+        if (ret < 0) {
             if (errno == EINTR) continue;
-            break; /* Channel closed or shutdown */
-        }
-
-        pthread_mutex_lock(&chan->lock);
-        if (chan->state != SRR_CHAN_OPEN) {
-            pthread_mutex_unlock(&chan->lock);
-            close(client_fd);
             break;
         }
-        chan->ref_count++;
-        pthread_mutex_unlock(&chan->lock);
 
-        ipc_client_session_t *sess = (ipc_client_session_t *)calloc(1, sizeof(ipc_client_session_t));
-        if (!sess) {
-            close(client_fd);
-            srr_channel_release(chan);
-            continue;
-        }
-        sess->channel = chan;
-        sess->client_fd = client_fd;
-        sess->ref_count = 1;
-        pthread_mutex_init(&sess->ref_lock, NULL);
-        pthread_mutex_init(&sess->client_write_lock, NULL);
-
-        ipc_client_node_t *node = (ipc_client_node_t *)malloc(sizeof(ipc_client_node_t));
-        if (!node) {
-            close(client_fd);
-            sess->client_fd = -1;
-            pthread_mutex_destroy(&sess->client_write_lock);
-            pthread_mutex_destroy(&sess->ref_lock);
-            free(sess);
-            srr_channel_release(chan);
-            continue;
-        }
-        node->client_fd = client_fd;
-
-        if (pthread_create(&node->thread, NULL, ipc_client_session_thread, sess) != 0) {
-            close(client_fd);
-            pthread_mutex_destroy(&sess->client_write_lock);
-            free(sess);
-            free(node);
-            srr_channel_release(chan);
-            continue;
+        /* Check for shutdown signal from srr_ipc_server_stop */
+        if (pfds[1].revents & (POLLIN | POLLHUP | POLLERR)) {
+            break;
         }
 
-        pthread_mutex_lock(&chan->ipc_clients_lock);
-        node->next = chan->ipc_clients;
-        chan->ipc_clients = node;
-        pthread_mutex_unlock(&chan->ipc_clients_lock);
+        if (pfds[0].revents & POLLIN) {
+            int client_fd = accept(listen_fd, NULL, NULL);
+            if (client_fd < 0) {
+                if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) continue;
+                break;
+            }
+
+            pthread_mutex_lock(&chan->lock);
+            if (chan->state != SRR_CHAN_OPEN || chan->ipc_stopped) {
+                pthread_mutex_unlock(&chan->lock);
+                close(client_fd);
+                break;
+            }
+            chan->ref_count++;
+            pthread_mutex_unlock(&chan->lock);
+
+            ipc_client_session_t *sess = (ipc_client_session_t *)calloc(1, sizeof(ipc_client_session_t));
+            if (!sess) {
+                close(client_fd);
+                srr_channel_release(chan);
+                continue;
+            }
+            sess->channel = chan;
+            sess->client_fd = client_fd;
+            sess->ref_count = 1;
+            pthread_mutex_init(&sess->ref_lock, NULL);
+            pthread_mutex_init(&sess->client_write_lock, NULL);
+
+            ipc_client_node_t *node = (ipc_client_node_t *)malloc(sizeof(ipc_client_node_t));
+            if (!node) {
+                close(client_fd);
+                sess->client_fd = -1;
+                pthread_mutex_destroy(&sess->client_write_lock);
+                pthread_mutex_destroy(&sess->ref_lock);
+                free(sess);
+                srr_channel_release(chan);
+                continue;
+            }
+            node->client_fd = client_fd;
+
+            if (pthread_create(&node->thread, NULL, ipc_client_session_thread, sess) != 0) {
+                close(client_fd);
+                pthread_mutex_destroy(&sess->client_write_lock);
+                free(sess);
+                free(node);
+                srr_channel_release(chan);
+                continue;
+            }
+
+            pthread_mutex_lock(&chan->ipc_clients_lock);
+            node->next = chan->ipc_clients;
+            chan->ipc_clients = node;
+            pthread_mutex_unlock(&chan->ipc_clients_lock);
+        }
     }
     return NULL;
 }
@@ -329,7 +342,14 @@ srr_status_t srr_ipc_server_start(srr_channel_t *channel, const char *service_na
         return SRR_INVALID;
     }
 
+    if (pipe(channel->ipc_shutdown_pipe) != 0) {
+        close(listen_fd);
+        unlink(path);
+        return SRR_NO_MEMORY;
+    }
+
     channel->has_ipc = true;
+    channel->ipc_stopped = false;
     channel->ipc_path = strdup(path);
     channel->ipc_listen_handle = (intptr_t)listen_fd;
     channel->ipc_clients = NULL;
@@ -340,6 +360,10 @@ srr_status_t srr_ipc_server_start(srr_channel_t *channel, const char *service_na
     if (pthread_create(&channel->ipc_listen_th, NULL, ipc_listener_thread, channel) != 0) {
         channel->ref_count--;
         close(listen_fd);
+        close(channel->ipc_shutdown_pipe[0]);
+        close(channel->ipc_shutdown_pipe[1]);
+        channel->ipc_shutdown_pipe[0] = -1;
+        channel->ipc_shutdown_pipe[1] = -1;
         unlink(path);
         free(channel->ipc_path);
         channel->ipc_path = NULL;
@@ -352,13 +376,38 @@ srr_status_t srr_ipc_server_start(srr_channel_t *channel, const char *service_na
 }
 
 void srr_ipc_server_stop(srr_channel_t *channel) {
-    if (!channel || !channel->has_ipc) return;
+    if (!channel) return;
 
+    /* Ensure shutdown is idempotent and executed at most once */
+    pthread_mutex_lock(&channel->lock);
+    if (!channel->has_ipc || channel->ipc_stopped) {
+        pthread_mutex_unlock(&channel->lock);
+        return;
+    }
+    channel->ipc_stopped = true;
+    int pipe_wr = channel->ipc_shutdown_pipe[1];
+    channel->ipc_shutdown_pipe[1] = -1;
+    pthread_mutex_unlock(&channel->lock);
+
+    /* Write 1 byte to shutdown pipe to reliably interrupt poll() without race conditions */
+    if (pipe_wr >= 0) {
+        char q = 'q';
+        (void)write(pipe_wr, &q, 1);
+        close(pipe_wr);
+    }
+
+    /* Wait for listener thread to cleanly terminate */
+    pthread_join(channel->ipc_listen_th, NULL);
+
+    /* Close listen descriptor and shutdown pipe read end after listener thread is joined */
     int fd = (int)channel->ipc_listen_handle;
     channel->ipc_listen_handle = -1;
     if (fd >= 0) {
-        shutdown(fd, SHUT_RDWR);
         close(fd);
+    }
+    if (channel->ipc_shutdown_pipe[0] >= 0) {
+        close(channel->ipc_shutdown_pipe[0]);
+        channel->ipc_shutdown_pipe[0] = -1;
     }
 
     if (channel->ipc_path) {
@@ -367,9 +416,7 @@ void srr_ipc_server_stop(srr_channel_t *channel) {
         channel->ipc_path = NULL;
     }
 
-    pthread_join(channel->ipc_listen_th, NULL);
-
-    /* Shutdown all client connection fds to interrupt reads */
+    /* Shutdown all client connection fds to interrupt active reads */
     pthread_mutex_lock(&channel->ipc_clients_lock);
     ipc_client_node_t *curr = channel->ipc_clients;
     while (curr) {
@@ -389,7 +436,10 @@ void srr_ipc_server_stop(srr_channel_t *channel) {
     channel->ipc_clients = NULL;
     pthread_mutex_destroy(&channel->ipc_clients_lock);
 
+    pthread_mutex_lock(&channel->lock);
     channel->has_ipc = false;
+    pthread_mutex_unlock(&channel->lock);
+
     /* Release reference held by listener thread */
     srr_channel_release(channel);
 }

@@ -108,17 +108,20 @@ SRR intentionally defines and maintains **two distinct binary protocols** optimi
 
 ## 4. Cross-Language Conformance Matrix
 
-All language implementations must agree byte-for-byte on the canonical test vectors defined in `tests/conformance/vectors.json`.
+All language implementations must agree byte-for-byte on the canonical test vectors defined in `tests/conformance/vectors.json`. Verification status is tracked transparently based on host environment availability and automated CI pipeline runs:
 
-| Target Implementation | CRC-16 Vector | COBS Vector | IPC Framing | Wire Framing | Invalid Rejection |
-|---|:---:|:---:|:---:|:---:|:---:|
-| **C Reference Implementation** | VERIFIED | VERIFIED | VERIFIED | VERIFIED | VERIFIED |
-| **Python Adapter** | VERIFIED | VERIFIED | VERIFIED | VERIFIED | VERIFIED |
-| **Perl Adapter** | VERIFIED | VERIFIED | VERIFIED | VERIFIED | VERIFIED |
-| **Go Adapter** | VERIFIED | VERIFIED | VERIFIED | VERIFIED | VERIFIED |
-| **Node.js Adapter** | VERIFIED | VERIFIED | VERIFIED | VERIFIED | VERIFIED |
-| **Ruby Adapter** | VERIFIED | VERIFIED | VERIFIED | VERIFIED | VERIFIED |
-| **PHP Adapter** | VERIFIED | VERIFIED | VERIFIED | VERIFIED | VERIFIED |
+| Target Implementation | Verification Environment | CRC-16 Vector | COBS Vector | IPC Framing | Wire Framing | Invalid Rejection |
+|---|---|:---:|:---:|:---:|:---:|:---:|
+| **C Reference Implementation** | Local Host + CI | **VERIFIED** | **VERIFIED** | **VERIFIED** | **VERIFIED** | **VERIFIED** |
+| **Python Adapter** | Local Host + CI | **VERIFIED** | **VERIFIED** | **VERIFIED** | **VERIFIED** | **VERIFIED** |
+| **Perl Adapter** | Local Host + CI | **VERIFIED** | **VERIFIED** | **VERIFIED** | **VERIFIED** | **VERIFIED** |
+| **Go Adapter** | Local Host + CI | **VERIFIED** | **VERIFIED** | **VERIFIED** | **VERIFIED** | **VERIFIED** |
+| **Node.js Adapter** | Automated CI (GitHub Actions) | **VERIFIED in CI** | **VERIFIED in CI** | **VERIFIED in CI** | **VERIFIED in CI** | **VERIFIED in CI** |
+| **Ruby Adapter** | Automated CI (GitHub Actions) | **VERIFIED in CI** | **VERIFIED in CI** | **VERIFIED in CI** | **VERIFIED in CI** | **VERIFIED in CI** |
+| **PHP Adapter** | Automated CI (GitHub Actions) | **VERIFIED in CI** | **VERIFIED in CI** | **VERIFIED in CI** | **VERIFIED in CI** | **VERIFIED in CI** |
+
+> [!NOTE]
+> On the local developer host (Fedora without `node`, `ruby`, or `php` installed), `python3 tests/conformance/test_conformance.py` explicitly marks missing interpreters as `UNVERIFIED on current host`. In the GitHub Actions CI environment where all interpreters are provisioned, 100% of adapters are verified automatically.
 
 ---
 

@@ -88,18 +88,26 @@ void test_ipc_roundtrip(void) {
 
 void test_forked_process_ipc(void) {
     printf("[TEST] Cross-process IPC via fork()... ");
+#if defined(__SANITIZE_THREAD__) || (defined(__has_feature) && __has_feature(thread_sanitizer))
+    printf("[SKIP: fork() without exec() after threads is not supported by ThreadSanitizer runtime]\n");
+    return;
+#endif
     const char *svc_name = "test_srr_fork_svc";
 
     pid_t pid = fork();
     assert(pid >= 0);
 
     if (pid == 0) {
-        /* Child Process: connects as an independent client process */
-        struct timespec ts = {0, 40 * 1000000L};
-        nanosleep(&ts, NULL);
-
+        /* Child Process: connects with retry to wait for parent listener to bind */
         srr_connection_t *conn = NULL;
-        assert(srr_connect(svc_name, NULL, &conn) == SRR_OK);
+        srr_status_t cst = SRR_DISCONNECTED;
+        for (int retry = 0; retry < 50; retry++) {
+            struct timespec ts = {0, 10 * 1000000L}; /* 10ms */
+            nanosleep(&ts, NULL);
+            cst = srr_connect(svc_name, NULL, &conn);
+            if (cst == SRR_OK) break;
+        }
+        assert(cst == SRR_OK);
 
         const char *msg = "ping from child process";
         char reply[64] = {0};

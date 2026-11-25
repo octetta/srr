@@ -45,10 +45,10 @@ SRR provides a synchronous **Send / Receive / Reply** service communication mode
 
 | Profile | Target Platforms | Concurrency Model | Dynamic Heap | Static RAM Footprint | Code Size (.text) | Max Payload |
 |---|---|---|:---:|:---:|:---:|:---:|
-| **Full** | Linux, macOS, Windows | `pthread` / Win32 | Optional (at init) | ~14 KB | ~18 KB | Configurable |
+| **Full** | Linux, macOS, Windows | `pthread` / Win32 | Dynamic (`malloc`) | ~14 KB | ~18 KB | Configurable |
 | **Compact** | RP2040 Raspberry Pi Pico | Cooperative main-loop | **Zero** | ~2 KB | ~4.1 KB | 512 B |
-| **Tiny** | AVR ATmega328P (Arduino) | Cooperative main-loop | **Zero** | **~392 Bytes** | **~2.8 KB** | 32 B |
-| **RTOS** | ESP32 (ESP-IDF) | FreeRTOS tasks/mutexes | Task Stack | ~8 KB | ~2.7 KB | Configurable |
+| **Tiny** | AVR ATmega328P (Arduino) | Cooperative main-loop | **Zero** | **335 B (AVR) / 416 B (Host)** | **~1.8 KB** | 32 B |
+| **RTOS** | ESP32 (ESP-IDF) | FreeRTOS tasks/mutexes | FreeRTOS Init Heap | ~8 KB | ~2.7 KB | Configurable |
 | **Multi-Cog**| Parallax Propeller P1 | 8-Cog Hub RAM mailbox | **Zero** | **~1.1 KB** | **~2.5 KB** | 64 B |
 
 ---

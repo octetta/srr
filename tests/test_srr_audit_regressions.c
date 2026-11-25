@@ -226,9 +226,9 @@ void test_regression_ipc_single_winner_arbitration(void) {
     srr_status_t st1 = srr_reply(req, "WINNER", 6);
     assert(st1 == SRR_OK);
 
-    /* Second reply on same request: Must not double-write or crash */
+    /* Second reply on same request: Must be strictly rejected with SRR_INVALID */
     srr_status_t st2 = srr_reply(req, "LOSER", 5);
-    assert(st2 == SRR_OK); /* Returns past status without double-write */
+    assert(st2 == SRR_INVALID); /* Repeated reply strictly rejected without double-write */
 
     srr_disconnect(conn);
     srr_channel_destroy(chan);
@@ -422,6 +422,223 @@ void test_regression_embedded_timer_wraparound(void) {
     printf("PASS\n");
 }
 
+/*
+ * ============================================================================
+ * Regression Test 9: Wire Encode Rejection of NULL Payload with Nonzero Length
+ * ============================================================================
+ */
+void test_regression_wire_encode_null_payload_rejection(void) {
+    printf("[REGRESSION 9] srr_wire_encode_frame rejects NULL payload with nonzero length... ");
+    srr_wire_header_t hdr = {
+        .magic = SRR_WIRE_MAGIC,
+        .version = SRR_WIRE_VERSION,
+        .msg_type = SRR_WIRE_REQUEST,
+        .service_id = 1,
+        .trans_id = 100
+    };
+    uint8_t out[128];
+    /* Nonzero length with NULL payload MUST return 0 (rejection) */
+    size_t sz = srr_wire_encode_frame(&hdr, NULL, 50, out, sizeof(out));
+    assert(sz == 0);
+
+    /* Zero length with NULL payload is valid */
+    sz = srr_wire_encode_frame(&hdr, NULL, 0, out, sizeof(out));
+    assert(sz > 0);
+    printf("PASS\n");
+}
+
+/*
+ * ============================================================================
+ * Regression Test 10: srr_pulse Reports Broken IPC Write Failures
+ * ============================================================================
+ */
+void test_regression_pulse_ipc_write_failure(void) {
+    printf("[REGRESSION 10] srr_pulse reports IPC write failures as SRR_DISCONNECTED... ");
+    const char *svc = "test_reg_pulse_fail";
+    srr_channel_t *chan = NULL;
+    assert(srr_channel_create_service(svc, NULL, &chan) == SRR_OK);
+
+    srr_connection_t *conn = NULL;
+    assert(srr_connect(svc, NULL, &conn) == SRR_OK);
+
+    /* Destroy server channel so client socket becomes severed */
+    srr_channel_destroy(chan);
+
+    /* srr_pulse must detect the broken socket and return SRR_DISCONNECTED */
+    srr_status_t st = srr_pulse(conn, 1, 100);
+    assert(st == SRR_DISCONNECTED);
+
+    srr_disconnect(conn);
+    printf("PASS\n");
+}
+
+/*
+ * ============================================================================
+ * Regression Test 11: srr_reply Validates Pointer/Length & Rejects Repetition
+ * ============================================================================
+ */
+struct reply_val_ctx {
+    srr_connection_t *conn;
+    srr_status_t status;
+};
+
+static void *reply_val_client_th_fn(void *arg) {
+    struct reply_val_ctx *ctx = (struct reply_val_ctx *)arg;
+    char rep[64];
+    size_t rlen = 0;
+    ctx->status = srr_send(ctx->conn, "HELLO", 5, rep, sizeof(rep), &rlen);
+    return NULL;
+}
+
+void test_regression_reply_validation_and_idempotency(void) {
+    printf("[REGRESSION 11] srr_reply validates pointers and strictly rejects repeated replies... ");
+    srr_channel_t *chan = NULL;
+    assert(srr_channel_create(NULL, &chan) == SRR_OK);
+
+    srr_connection_t *conn = NULL;
+    assert(srr_connect_channel(chan, NULL, &conn) == SRR_OK);
+
+    /* In a thread: send request */
+    pthread_t th;
+    struct reply_val_ctx ctx = { conn, SRR_OK };
+
+    pthread_create(&th, NULL, reply_val_client_th_fn, &ctx);
+
+    srr_request_t *req = NULL;
+    assert(srr_receive(chan, &req) == SRR_OK);
+
+    /* 1. Invalid pointer with nonzero length MUST fail with SRR_INVALID without mutating state */
+    srr_status_t st = srr_reply(req, NULL, 32);
+    assert(st == SRR_INVALID);
+
+    /* Retain request so caller holds an extra reference to safely test repeated reply rejection */
+    srr_request_retain(req);
+
+    /* 2. Valid reply succeeds */
+    st = srr_reply(req, "OK", 3);
+    assert(st == SRR_OK);
+
+    /* 3. A repeated reply attempt on the same completed request must fail with SRR_INVALID */
+    st = srr_reply(req, "AGAIN", 6);
+    assert(st == SRR_INVALID);
+
+    pthread_join(th, NULL);
+    assert(ctx.status == SRR_OK);
+
+    srr_disconnect(conn);
+    srr_channel_destroy(chan);
+    printf("PASS\n");
+}
+
+/*
+ * ============================================================================
+ * Regression Test 12: Embedded Pending Registration, Rollback, and Capacity
+ * ============================================================================
+ */
+static int failing_tx(const uint8_t *data, size_t len, void *user_data) {
+    (void)data; (void)len; (void)user_data;
+    return -1; /* Simulated hardware transmission failure */
+}
+
+void test_regression_embedded_tx_lifecycle(void) {
+    printf("[REGRESSION 12] Embedded transaction registration, rollback, and capacity... ");
+    srr_endpoint_t ep;
+    uint8_t rx_buf[128], dec_buf[128], tx_buf[128], rep_buf[32];
+    assert(srr_endpoint_init(
+        &ep, 1, mock_tx_capture, NULL,
+        rx_buf, sizeof(rx_buf),
+        dec_buf, sizeof(dec_buf),
+        tx_buf, sizeof(tx_buf),
+        rep_buf, sizeof(rep_buf)
+    ) == 0);
+
+    /* 1. Test rollback on transmit failure */
+    ep.tx_fn = failing_tx;
+    uint8_t c_rep[32];
+    uint64_t tid = srr_begin_request(&ep, 1, 1, "REQ", 3, c_rep, sizeof(c_rep), 100, 1000);
+    assert(tid == 0);
+    assert(ep.transactions[0].state == SRR_TRANS_UNUSED); /* Rolled back */
+
+    /* 2. Test successful registration */
+    ep.tx_fn = mock_tx_capture;
+    tid = srr_begin_request(&ep, 1, 1, "REQ", 3, c_rep, 4 /* small capacity = 4 */, 100, 1000);
+    assert(tid > 0);
+    assert(ep.transactions[0].state == SRR_TRANS_PENDING);
+
+    /* 3. Feed reply that overflows caller's reply_cap (10 bytes > 4 bytes) */
+    srr_wire_header_t r_hdr = {
+        .magic = SRR_WIRE_MAGIC,
+        .version = SRR_WIRE_VERSION,
+        .msg_type = SRR_WIRE_REPLY,
+        .session_id = 1,
+        .trans_id = tid,
+        .service_id = 1,
+        .operation_id = 1,
+        .payload_len = 0
+    };
+    uint8_t frame[128];
+    const char *large_reply = "OVERFLOW_PAYLOAD";
+    size_t flen = srr_wire_encode_frame(&r_hdr, large_reply, strlen(large_reply), frame, sizeof(frame));
+    assert(flen > 0);
+
+    for (size_t i = 0; i < flen; i++) {
+        srr_endpoint_feed_byte(&ep, frame[i]);
+    }
+
+    /* Overflow MUST transition state to SRR_TRANS_ERROR with error_code 7 (SRR_TOO_LARGE) */
+    assert(ep.transactions[0].state == SRR_TRANS_ERROR);
+    assert(ep.transactions[0].error_code == 7);
+
+    /* Collect reply and verify slot is cleared for reuse */
+    size_t out_len = 0;
+    int err = 0;
+    int rc = srr_collect_reply(&ep, tid, &out_len, &err);
+    assert(rc == -1);
+    assert(err == 7);
+    assert(ep.transactions[0].state == SRR_TRANS_UNUSED);
+
+    /* 4. Test cancellation and slot reuse */
+    tid = srr_begin_request(&ep, 1, 1, "REQ2", 4, c_rep, sizeof(c_rep), 100, 1000);
+    assert(tid > 0);
+    assert(srr_cancel_transaction(&ep, tid) == 0);
+    assert(srr_poll_transaction(&ep, tid) == SRR_TRANS_UNUSED); /* Slot immediately freed for reuse */
+
+    printf("PASS\n");
+}
+
+/*
+ * ============================================================================
+ * Regression Test 13: Concurrent Channel Close & IPC Server Stop Idempotency
+ * ============================================================================
+ */
+static void *concurrent_close_worker(void *arg) {
+    srr_channel_t *chan = (srr_channel_t *)arg;
+    for (int i = 0; i < 5; i++) {
+        srr_channel_close(chan);
+        usleep(1000);
+    }
+    return NULL;
+}
+
+void test_regression_concurrent_close_idempotency(void) {
+    printf("[REGRESSION 13] Concurrent channel close & IPC shutdown idempotency... ");
+    const char *svc = "test_reg_conc_close";
+    srr_channel_t *chan = NULL;
+    assert(srr_channel_create_service(svc, NULL, &chan) == SRR_OK);
+
+    pthread_t t1, t2, t3;
+    pthread_create(&t1, NULL, concurrent_close_worker, chan);
+    pthread_create(&t2, NULL, concurrent_close_worker, chan);
+    pthread_create(&t3, NULL, concurrent_close_worker, chan);
+
+    pthread_join(t1, NULL);
+    pthread_join(t2, NULL);
+    pthread_join(t3, NULL);
+
+    srr_channel_destroy(chan);
+    printf("PASS\n");
+}
+
 int main(void) {
     printf("=== SRR Correctness & Regression Audit Test Suite ===\n");
     test_regression_ipc_timeout_disconnect();
@@ -432,6 +649,11 @@ int main(void) {
     test_regression_embedded_reply_bounds();
     test_regression_tiny_oversized_request();
     test_regression_embedded_timer_wraparound();
-    printf("All 8 regression tests passed with 100%% precision!\n");
+    test_regression_wire_encode_null_payload_rejection();
+    test_regression_pulse_ipc_write_failure();
+    test_regression_reply_validation_and_idempotency();
+    test_regression_embedded_tx_lifecycle();
+    test_regression_concurrent_close_idempotency();
+    printf("All 13 regression tests passed with 100%% precision!\n");
     return 0;
 }

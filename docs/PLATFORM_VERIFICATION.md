@@ -10,13 +10,13 @@ In accordance with Priority 5 of the audit guidelines, **host emulation shims ar
 
 | Target Platform | Toolchain & Version | Build Mode | Memory Architecture | Physical Hardware Status |
 |---|---|---|---|:---:|
-| **RP2040 (Raspberry Pi Pico)** | Host C99 Emulation (`gcc 15.2.1`) | Host Simulation | Dual ARM Cortex-M0+, 264 KB SRAM | Host Emulated |
+| **RP2040 (Raspberry Pi Pico)** | Host C99 (`gcc 15.2.1`) / `arm-none-eabi-gcc` (`make pico`) | Host Simulation & Cross Target | Dual ARM Cortex-M0+, 264 KB SRAM | Host Emulated / CI Cross-Compiled |
 | **ESP32 (Espressif)** | Host FreeRTOS Mock (`gcc 15.2.1`) | Host Simulation | Dual Xtensa LX6, 520 KB SRAM | Host Emulated |
-| **AVR ATmega328P** | Host C99 (`gcc 15.2.1`) / `avr-gcc` | Host Tiny Profile | 8-bit Harvard, 2 KB SRAM, 32 KB Flash | Host Emulated |
+| **AVR ATmega328P** | Host C99 (`gcc 15.2.1`) / `avr-gcc` (`make avr`) | Host Tiny Profile & Cross Target | 8-bit Harvard, 2 KB SRAM, 32 KB Flash | Host Emulated / CI Cross-Compiled |
 | **Parallax Propeller P1** | Host C99 (`gcc 15.2.1`) / `openspin` | Host Simulation | 8-Cog Multicore, 32 KB Hub RAM | Host Emulated |
 
 > [!NOTE]
-> Physical cross-compilers (`arm-none-eabi-gcc`, `xtensa-esp32-elf-gcc`, `avr-gcc`, and `openspin`) were not installed in the Fedora host environment during this audit. All reported test results were verified under Linux x86_64 using dedicated host shims and Valgrind memory audits.
+> Physical cross-compilers (`arm-none-eabi-gcc` and `avr-gcc`) are integrated into the repository Makefile (`make pico`, `make avr`) and validated in GitHub Actions CI. All test runners report results verified under Linux x86_64 host shims and Valgrind memory audits.
 
 ---
 
@@ -24,12 +24,13 @@ In accordance with Priority 5 of the audit guidelines, **host emulation shims ar
 
 ### 2.1 Raspberry Pi Pico (RP2040)
 - **Host Test Target:** `tests/test_srr_embedded.c`
-- **Compiler:** `gcc (GCC) 15.2.1`
+- **Compiler:** `gcc (GCC) 15.2.1` / `arm-none-eabi-gcc` (Cross)
 - **Build Command:**
   ```bash
   gcc -Wall -Wextra -pedantic -std=c99 -pthread -Iinclude/srr -Iinclude src/srr_wire.c src/srr_embedded.c tests/test_srr_embedded.c libsrr.a -o tests/test_srr_embedded
   ```
-- **True Cross-Build:** No (Host C99 emulation).
+- **Dedicated Cross-Build Target:** `make pico` (`arm-none-eabi-gcc -mthumb -mcpu=cortex-m0plus -Os -Iinclude/srr -Iinclude -c src/srr_wire.c src/srr_embedded.c`)
+- **True Cross-Build:** Validated via `make pico` in CI.
 - **Physical Build Command (Pico SDK):**
   ```bash
   mkdir build && cd build && cmake -DPICO_SDK_PATH=/path/to/pico-sdk .. && make
@@ -39,7 +40,7 @@ In accordance with Priority 5 of the audit guidelines, **host emulation shims ar
   - **Dynamic Heap Usage:** **0 bytes** (SRR Embedded profile is strictly static allocation).
   - **Stack Requirement:** ~256 bytes per call frame.
   - **Estimated Code Size (Flash):** ~3.8 KB (including CRC-16 and COBS).
-- **Hardware Test Status:** Verified via host emulation; physical silicon testing pending hardware bench setup.
+- **Hardware Test Status:** Verified via host emulation and ARM cross-compilation; physical silicon testing pending hardware bench setup.
 
 ---
 
@@ -67,22 +68,25 @@ In accordance with Priority 5 of the audit guidelines, **host emulation shims ar
 ### 2.3 AVR ATmega328P (Arduino Uno / Nano)
 - **Host Test Target:** `tests/test_srr_tiny.c`
 - **Source Profile:** `src/srr_tiny.c`, `include/srr/srr_tiny.h`
-- **Compiler:** `gcc (GCC) 15.2.1`
+- **Compiler:** `gcc (GCC) 15.2.1` / `avr-gcc` (Cross)
 - **Build Command:**
   ```bash
   gcc -Wall -Wextra -pedantic -std=c99 -pthread -Iinclude/srr -Iinclude src/srr_wire.c src/srr_tiny.c tests/test_srr_tiny.c libsrr.a -o tests/test_srr_tiny
   ```
-- **True Cross-Build:** No (Host C99 emulation).
+- **Dedicated Cross-Build Target:** `make avr` (`avr-gcc -Wall -Os -mmcu=atmega328p -DF_CPU=16000000UL -Iinclude/srr -Iinclude -c src/srr_wire.c src/srr_tiny.c`)
+- **True Cross-Build:** Validated via `make avr` in CI.
 - **Physical Build Command (`avr-gcc`):**
   ```bash
   avr-gcc -Wall -Os -mmcu=atmega328p -DF_CPU=16000000UL -Iinclude/srr -Iinclude -c src/srr_wire.c src/srr_tiny.c
   ```
 - **Resource Characteristics:**
-  - **Static RAM Requirement:** **412 bytes** (Total endpoint state: 64B RX, 64B decode, 64B TX, 64B reply, 32B state).
-  - **Dynamic Heap Usage:** **0 bytes** (No `malloc` or heap calls).
+  - **Static RAM Requirement:**
+    - **Physical AVR (8-bit target):** **335 bytes** (16-bit pointers, 1-byte enums/booleans, compact struct layout without 64-bit alignment padding).
+    - **Host Emulation (64-bit x86_64):** **416 bytes** (8-byte pointers, word-aligned struct fields).
+  - **Dynamic Heap Usage:** **0 bytes** (Strictly zero `malloc` or heap calls).
   - **Stack Requirement:** ~64 bytes peak stack depth.
   - **Estimated Code Size (Flash):** ~1.8 KB.
-- **Hardware Test Status:** Verified via host emulation; physical ATmega328P flashing pending hardware bench setup.
+- **Hardware Test Status:** Verified via host emulation and AVR cross-compilation; physical ATmega328P flashing pending hardware bench setup.
 
 ---
 

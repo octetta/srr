@@ -18,7 +18,7 @@ TEST_BINS := $(TEST_SRCS:.c=)
 
 # Default target displays help
 .DEFAULT_GOAL := help
-.PHONY: help all lib shared examples tools beam test-beam win32 test test-asan test-tsan test-ubsan test-valgrind test-conformance test-adapters test-scripts test-all bench clean
+.PHONY: help all lib shared examples tools beam test-beam win32 avr pico test test-asan test-tsan test-ubsan test-valgrind test-conformance test-adapters test-scripts test-all bench clean
 
 # ------------------------------------------------------------------------------
 # Help Target
@@ -108,6 +108,37 @@ win32:
 	$(WIN_CC) $(CFLAGS) tests/test_srr_wire.c -L. -lsrr_win32 -o tests/test_srr_wire.exe
 	$(WIN_CC) $(CFLAGS) tests/test_srr_embedded.c -L. -lsrr_win32 -o tests/test_srr_embedded.exe
 	@echo "Windows build completed successfully: libsrr_win32.a"
+
+# ------------------------------------------------------------------------------
+# Embedded Cross-Compilation Targets
+# ------------------------------------------------------------------------------
+
+AVR_CC      ?= avr-gcc
+AVR_SIZE    ?= avr-size
+PICO_CC     ?= arm-none-eabi-gcc
+PICO_SIZE   ?= arm-none-eabi-size
+
+avr:
+	@if command -v $(AVR_CC) >/dev/null 2>&1; then \
+		echo "--- Cross-compiling SRR Tiny for AVR ATmega328P ---"; \
+		$(AVR_CC) -Wall -Wextra -Os -mmcu=atmega328p -DF_CPU=16000000UL -Iinclude/srr -Iinclude -c src/srr_wire.c -o src/srr_wire.avr.o; \
+		$(AVR_CC) -Wall -Wextra -Os -mmcu=atmega328p -DF_CPU=16000000UL -Iinclude/srr -Iinclude -c src/srr_tiny.c -o src/srr_tiny.avr.o; \
+		$(AVR_SIZE) -C --mcu=atmega328p src/srr_wire.avr.o src/srr_tiny.avr.o; \
+		echo "AVR build completed successfully."; \
+	else \
+		echo "Notice: avr-gcc not found in PATH; skipping AVR cross-compilation."; \
+	fi
+
+pico:
+	@if command -v $(PICO_CC) >/dev/null 2>&1; then \
+		echo "--- Cross-compiling SRR for Raspberry Pi Pico (ARM Cortex-M0+) ---"; \
+		$(PICO_CC) -Wall -Wextra -Os -mcpu=cortex-m0plus -mthumb -Iinclude/srr -Iinclude -c src/srr_wire.c -o src/srr_wire.pico.o; \
+		$(PICO_CC) -Wall -Wextra -Os -mcpu=cortex-m0plus -mthumb -Iinclude/srr -Iinclude -c src/srr_embedded.c -o src/srr_embedded.pico.o; \
+		$(PICO_SIZE) src/srr_wire.pico.o src/srr_embedded.pico.o; \
+		echo "Pico cross-build completed successfully."; \
+	else \
+		echo "Notice: arm-none-eabi-gcc not found in PATH; skipping Pico cross-compilation."; \
+	fi
 
 # ------------------------------------------------------------------------------
 # Testing & Verification

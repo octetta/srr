@@ -186,10 +186,6 @@ srr_status_t srr_channel_create_service(
 srr_status_t srr_channel_close(srr_channel_t *channel) {
     if (!channel) return SRR_INVALID;
 
-    if (channel->has_ipc) {
-        srr_ipc_server_stop(channel);
-    }
-
     pthread_mutex_lock(&channel->lock);
     if (channel->state == SRR_CHAN_CLOSED) {
         pthread_mutex_unlock(&channel->lock);
@@ -204,6 +200,11 @@ srr_status_t srr_channel_close(srr_channel_t *channel) {
     channel->q_tail = NULL;
     channel->q_count = 0;
     pthread_mutex_unlock(&channel->lock);
+
+    /* Stop IPC server (idempotent, protected by channel state transition) */
+    if (channel->has_ipc) {
+        srr_ipc_server_stop(channel);
+    }
 
     while (curr) {
         srr_request_t *next = curr->next;
@@ -738,8 +739,18 @@ srr_status_t srr_pulse(
             .payload_len = sizeof(srr_pulse_payload_t)
         };
         srr_pulse_payload_t pl = { .code = code, ._reserved = 0, .value = value };
-        srr_ipc_write_all(connection->ipc_handle, &hdr, sizeof(hdr), 5000);
-        srr_ipc_write_all(connection->ipc_handle, &pl, sizeof(pl), 5000);
+        if (srr_ipc_write_all(connection->ipc_handle, &hdr, sizeof(hdr), 5000) != 0 ||
+            srr_ipc_write_all(connection->ipc_handle, &pl, sizeof(pl), 5000) != 0) {
+            connection->connected = false;
+#ifdef _WIN32
+            CloseHandle((HANDLE)connection->ipc_handle);
+#else
+            close((int)connection->ipc_handle);
+#endif
+            connection->ipc_handle = 0;
+            pthread_mutex_unlock(&connection->send_lock);
+            return SRR_DISCONNECTED;
+        }
         pthread_mutex_unlock(&connection->send_lock);
         return SRR_OK;
     }
@@ -818,6 +829,7 @@ srr_status_t srr_reply(
     size_t reply_size)
 {
     if (!request) return SRR_INVALID;
+    if (reply_size > 0 && !reply_data) return SRR_INVALID;
     if (request->type == SRR_ITEM_PULSE) {
         srr_request_dispose(request);
         return SRR_INVALID;
@@ -825,7 +837,12 @@ srr_status_t srr_reply(
 
     /* Single-winner transaction state arbitration */
     pthread_mutex_lock(&request->lock);
-    if (request->state >= SRR_STATE_REPLIED) {
+    if (request->state == SRR_STATE_REPLIED || request->state == SRR_STATE_ERROR) {
+        pthread_mutex_unlock(&request->lock);
+        srr_request_release(request);
+        return SRR_INVALID; /* Repeated reply attempts strictly rejected */
+    }
+    if (request->state >= SRR_STATE_CANCELLED) {
         srr_status_t past_status = request->terminal_status;
         pthread_mutex_unlock(&request->lock);
         srr_request_release(request);
@@ -833,6 +850,32 @@ srr_status_t srr_reply(
     }
 
     if (request->backend == SRR_BACKEND_IPC) {
+        ipc_client_session_t *sess = (ipc_client_session_t *)request->ipc_session;
+        if (sess && sess->channel &&
+            reply_size > sess->channel->max_reply_size) {
+            request->state = SRR_STATE_ERROR;
+            request->terminal_status = SRR_TOO_LARGE;
+            pthread_mutex_unlock(&request->lock);
+
+            if (request->ipc_client_lock) {
+                pthread_mutex_lock(request->ipc_client_lock);
+                srr_frame_header_t err_hdr = {
+                    .magic = SRR_PROTO_MAGIC,
+                    .version = SRR_PROTO_VERSION,
+                    .msg_type = SRR_MSG_ERROR,
+                    .flags = 0,
+                    .trans_id = request->ipc_trans_id,
+                    .payload_len = sizeof(srr_error_payload_t)
+                };
+                srr_error_payload_t err_pl = { .error_status = (uint32_t)SRR_TOO_LARGE, ._reserved = 0 };
+                srr_ipc_write_all(request->ipc_client_handle, &err_hdr, sizeof(err_hdr), 5000);
+                srr_ipc_write_all(request->ipc_client_handle, &err_pl, sizeof(err_pl), 5000);
+                pthread_mutex_unlock(request->ipc_client_lock);
+            }
+            srr_request_release(request);
+            return SRR_TOO_LARGE;
+        }
+
         request->state = SRR_STATE_REPLIED;
         request->terminal_status = SRR_OK;
         pthread_mutex_unlock(&request->lock);
@@ -901,7 +944,12 @@ srr_status_t srr_reply_error(
 
     /* Single-winner transaction state arbitration */
     pthread_mutex_lock(&request->lock);
-    if (request->state >= SRR_STATE_REPLIED) {
+    if (request->state == SRR_STATE_REPLIED || request->state == SRR_STATE_ERROR) {
+        pthread_mutex_unlock(&request->lock);
+        srr_request_release(request);
+        return SRR_INVALID; /* Repeated reply attempts strictly rejected */
+    }
+    if (request->state >= SRR_STATE_CANCELLED) {
         srr_status_t past_status = request->terminal_status;
         pthread_mutex_unlock(&request->lock);
         srr_request_release(request);
