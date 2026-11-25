@@ -45,7 +45,18 @@ jobs:
         run: make test-asan
 
       - name: Run ThreadSanitizer
-        run: make test-tsan
+        run: |
+          set +e
+          make test-tsan > tsan.log 2>&1
+          RC=$?
+          cat tsan.log
+          if [ $RC -ne 0 ]; then
+            echo "### ThreadSanitizer Failure" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            tail -n 150 tsan.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            exit $RC
+          fi
 
       - name: Run cross-language protocol conformance
         run: make test-conformance
