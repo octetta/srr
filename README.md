@@ -37,17 +37,30 @@ Inspired by the proven microkernel message-passing architecture of QNX, SRR mode
 
 ## SRR vs Alternatives at a Glance
 
-| Feature | Raw Unix Sockets / Pipes | POSIX Queues (`mq`) | ZeroMQ (REQ/REP) | gRPC | **SRR (Send/Receive/Reply)** |
+| Feature | Raw Unix Sockets / Pipes | Go Channels (`chan`) | ZeroMQ (REQ/REP) | gRPC | **SRR (Send/Receive/Reply)** |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **Message Framing** | ❌ Raw byte stream | ✅ Discrete messages | ✅ Framed messages | ✅ HTTP/2 Framed | **✅ Built-in COBS & Header** |
-| **Request-Reply Correlation** | ❌ Manual ID tracking | ❌ None (FIFO queue) | ⚠️ Strict lock-step | ✅ Stream multiplexing | **✅ Automatic Transaction IDs** |
-| **Timeout Stale-Reply Safety** | ❌ Leaves stale data in buffer | ❌ N/A (unidirectional) | ❌ Socket enters broken state | ✅ Stream cancellation | **✅ Atomic single-winner discard** |
-| **Runs on Bare-Metal Microcontrollers** | ❌ OS only | ❌ OS only | ❌ No (requires OS & heap)| ❌ No (massive footprint) | **✅ Yes (Zero heap, 335B RAM)** |
-| **Memory Allocation** | Kernel buffers | Kernel buffers | Dynamic (`malloc`) | Heavy dynamic heap | **Zero-Heap Profiles available** |
-| **In-Process Thread Transport** | ❌ Socket overhead | ❌ High syscall overhead | ⚠️ `inproc://` (heap heavy) | ❌ Inefficient | **✅ Pointer exchange (6.7 µs)** |
-| **Cross-Platform Host Support** | ❌ Unix only (Pipes differ) | ❌ Linux/POSIX only | ✅ Windows/Unix | ✅ Windows/Unix | **✅ Linux, macOS, Windows, Bare Metal** |
-| **Telemetry / One-Way Events** | ❌ Ad-hoc packet | ⚠️ Priority write | ⚠️ PUB/SUB socket | ⚠️ Unary RPC | **✅ Native `srr_pulse()` (4B code, 8B val)** |
-| **Binary Footprint** | System libc | System libc | ~2.5 MB | ~15+ MB | **~18 KB (Host) / ~1.8 KB (AVR)** |
+| **Communication Scope** | OS processes only | Single Go process only | Multi-process / Network | Network / Cloud | **Threads, Processes & Microcontrollers** |
+| **Message Framing** | ❌ Raw byte stream | ✅ In-memory objects | ✅ Framed messages | ✅ HTTP/2 Framed | **✅ Built-in COBS & 32B Wire Header** |
+| **Two-Way Request-Reply** | ❌ Manual correlation IDs | ⚠️ Manual reply channel plumbing | ⚠️ Strict lock-step | ✅ Stream multiplexing | **✅ First-class atomic primitive** |
+| **Timeout Stale-Reply Safety** | ❌ Leaves stale data in buffer | ⚠️ Leaks goroutines if abandoned | ❌ Socket breaks on desync | ✅ Stream cancellation | **✅ Atomic single-winner discard** |
+| **Runs on Bare-Metal Microcontrollers** | ❌ OS only | ❌ Requires Go runtime & GC | ❌ Requires OS & heap | ❌ Massive footprint | **✅ Yes (Zero heap, 335B RAM)** |
+| **Memory Allocation** | Kernel buffers | Heap allocated (`make`) | Dynamic (`malloc`) | Heavy dynamic heap | **Zero-Heap Profiles available** |
+| **In-Process Thread Performance** | ❌ Socket overhead | ✅ Fast (runtime channel) | ⚠️ `inproc://` (heap heavy) | ❌ Inefficient | **✅ Direct pointer exchange (6.7 µs)** |
+| **Cross-Language Interoperability** | Manual byte parsing | ❌ Go language only | C/C++ bindings | Polyglot (heavy codegen) | **✅ C, Go, Python, Erlang, Node, etc.** |
+| **Telemetry / One-Way Events** | ❌ Ad-hoc packet | ⚠️ Non-blocking send | ⚠️ PUB/SUB socket | ⚠️ Unary RPC | **✅ Native `srr_pulse()` (4B code, 8B val)** |
+| **Binary / Runtime Footprint** | System libc | ~2-10 MB Go runtime | ~2.5 MB C++ lib | ~15+ MB runtime | **~18 KB (Host) / ~1.8 KB (AVR)** |
+
+---
+
+### What About Go Channels?
+
+Many programmers love Go because passing messages through channels (`ch <- msg`) avoids the nightmare of mutex locks and shared-memory race conditions. 
+
+SRR shares that same clean philosophy, but breaks through the walls that Go channels hit in real systems:
+
+1. **Go channels are one-way:** If you want a worker to reply back to you in Go, you have to manually invent a request struct that carries a second channel just for the response (`type Request struct { data string; replyChan chan string }`). In SRR, **two-way Request-Reply is the fundamental atomic building block**—the client calls `srr_send()`, the server answers with `srr_reply(req, ...)`, and correlation is handled automatically.
+2. **Go channels cannot leave your program:** A Go channel only exists inside one running Go program. You cannot send a Go channel across an OS process, to a Python script, or over a USB cable to a microcontroller. As soon as your architecture leaves that single Go binary, you are forced to throw away channels and set up gRPC, HTTP, or custom byte parsers.
+3. **SRR gives you message passing everywhere:** The exact same Send / Receive / Reply code you use between C threads works across separate processes, across programming languages (via native Go, Python, Perl, and Erlang adapters), and down a serial wire to an 8-bit Arduino with zero heap memory.
 
 ---
 

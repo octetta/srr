@@ -7,6 +7,7 @@ This guide walks you through building concurrent, message-driven C applications 
 ## What SRR Is Good For & How to Use It
 
 ### What SRR Is Good For
+* **Message Passing Without Mutexes:** Like Go channels or Erlang mailboxes, SRR replaces complex mutex lock orchestration with clean, channel-based message passing—but extends that model across process boundaries, foreign languages, and hardware devices.
 * **Uniform Multi-Tier Architecture:** One communication contract spans in-process threads, local OS processes, network UDP sockets, and bare-metal microcontrollers (Pico, AVR, ESP32, Propeller P1).
 * **Deterministic Single-Winner RPC:** Transactions never complete twice. Concurrent timeouts, late server replies, and client disconnects are arbitrated safely without stale replies or lost wakeups.
 * **Zero-Heap Microcontroller Profiles:** Runs without dynamic heap memory (`malloc`), preventing fragmentation on 8-bit and 32-bit embedded targets.
