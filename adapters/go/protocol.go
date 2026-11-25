@@ -73,6 +73,131 @@ func CRC16(data []byte, initCRC uint16) uint16 {
 	return crc
 }
 
+// COBSEncode encodes data using Consistent Overhead Byte Stuffing.
+func COBSEncode(data []byte) []byte {
+	out := []byte{1}
+	codeIdx := 0
+	var code byte = 1
+
+	for _, b := range data {
+		if b == 0 {
+			out[codeIdx] = code
+			code = 1
+			codeIdx = len(out)
+			out = append(out, 1)
+		} else {
+			out = append(out, b)
+			code++
+			if code == 0xFF {
+				out[codeIdx] = code
+				code = 1
+				codeIdx = len(out)
+				out = append(out, 1)
+			}
+		}
+	}
+	out[codeIdx] = code
+	return out
+}
+
+// COBSDecode decodes data using Consistent Overhead Byte Stuffing.
+func COBSDecode(data []byte) ([]byte, error) {
+	if len(data) == 0 {
+		return []byte{}, nil
+	}
+	out := make([]byte, 0, len(data))
+	i := 0
+	n := len(data)
+	for i < n {
+		code := data[i]
+		i++
+		if code == 0 {
+			return nil, errors.New("srr: zero byte inside COBS data")
+		}
+		for j := byte(1); j < code; j++ {
+			if i >= n {
+				return nil, errors.New("srr: truncated COBS stream")
+			}
+			out = append(out, data[i])
+			i++
+		}
+		if code < 0xFF && i < n {
+			out = append(out, 0)
+		}
+	}
+	return out, nil
+}
+
+// EncodeWireFrame encodes a COBS-framed wire packet terminated by 0x00 delimiter.
+func EncodeWireFrame(msgType uint16, serviceID, opID uint16, sessionID uint32, transID uint64, payload []byte, flags uint16) []byte {
+	raw := make([]byte, WireHeaderSize+len(payload)+CRCSize)
+	binary.LittleEndian.PutUint32(raw[0:4], WireMagic)
+	binary.LittleEndian.PutUint16(raw[4:6], WireVersion)
+	binary.LittleEndian.PutUint16(raw[6:8], msgType)
+	binary.LittleEndian.PutUint16(raw[8:10], flags)
+	binary.LittleEndian.PutUint16(raw[10:12], serviceID)
+	binary.LittleEndian.PutUint16(raw[12:14], opID)
+	binary.LittleEndian.PutUint16(raw[14:16], 0) // reserved
+	binary.LittleEndian.PutUint32(raw[16:20], sessionID)
+	binary.LittleEndian.PutUint64(raw[20:28], transID)
+	binary.LittleEndian.PutUint32(raw[28:32], uint32(len(payload)))
+	copy(raw[WireHeaderSize:], payload)
+
+	crc := CRC16(raw[:WireHeaderSize+len(payload)], 0xFFFF)
+	binary.LittleEndian.PutUint16(raw[WireHeaderSize+len(payload):], crc)
+
+	enc := COBSEncode(raw)
+	return append(enc, 0x00)
+}
+
+// DecodeWireFrame decodes a COBS-framed wire packet terminated by 0x00 delimiter.
+func DecodeWireFrame(frame []byte) (*WireHeader, []byte, error) {
+	if len(frame) == 0 || frame[len(frame)-1] != 0x00 {
+		return nil, nil, errors.New("srr: wire frame must end with 0x00 delimiter")
+	}
+	unCobs, err := COBSDecode(frame[:len(frame)-1])
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(unCobs) < WireHeaderSize+CRCSize {
+		return nil, nil, ErrDatagramShort
+	}
+	body := unCobs[:len(unCobs)-CRCSize]
+	receivedCRC := binary.LittleEndian.Uint16(unCobs[len(unCobs)-CRCSize:])
+	calcCRC := CRC16(body, 0xFFFF)
+	if receivedCRC != calcCRC {
+		return nil, nil, ErrCRCMismatch
+	}
+
+	magic := binary.LittleEndian.Uint32(body[0:4])
+	if magic != WireMagic {
+		return nil, nil, ErrInvalidMagic
+	}
+	ver := binary.LittleEndian.Uint16(body[4:6])
+	if ver != WireVersion {
+		return nil, nil, ErrInvalidVersion
+	}
+	plen := binary.LittleEndian.Uint32(body[28:32])
+	payload := body[WireHeaderSize:]
+	if uint32(len(payload)) != plen {
+		return nil, nil, errors.New("srr: payload length mismatch")
+	}
+
+	hdr := &WireHeader{
+		Magic:       magic,
+		Version:     ver,
+		MsgType:     binary.LittleEndian.Uint16(body[6:8]),
+		Flags:       binary.LittleEndian.Uint16(body[8:10]),
+		ServiceID:   binary.LittleEndian.Uint16(body[10:12]),
+		OperationID: binary.LittleEndian.Uint16(body[12:14]),
+		Reserved:    binary.LittleEndian.Uint16(body[14:16]),
+		SessionID:   binary.LittleEndian.Uint32(body[16:20]),
+		TransID:     binary.LittleEndian.Uint64(body[20:28]),
+		PayloadLen:  plen,
+	}
+	return hdr, payload, nil
+}
+
 // EncodeIPCRequest encodes a synchronous request frame.
 func EncodeIPCRequest(transID uint64, payload []byte) []byte {
 	buf := make([]byte, IPCHeaderSize+len(payload))

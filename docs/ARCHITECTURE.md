@@ -81,6 +81,13 @@ A transaction completes **at most once**:
 
 ## 3. Wire Protocol & Binary Framing
 
+SRR utilizes two distinct framing specifications based on transport requirements (detailed in [docs/PROTOCOL_CONFORMANCE.md](PROTOCOL_CONFORMANCE.md)):
+
+1. **Kernel-Managed IPC Framing (24-byte header):** Used for Unix Domain Sockets and Windows Named Pipes, relying on kernel stream reliability.
+2. **Device Wire Framing (32-byte header + CRC-16 + COBS):** Used for packet, serial, and micro-controller transports (see [docs/SRR_WIRE_PROTOCOL.md](SRR_WIRE_PROTOCOL.md)).
+
+### 3.1 IPC Frame Header (24 Bytes)
+
 All cross-process IPC communication uses a packed 24-byte binary frame header:
 
 ```text

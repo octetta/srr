@@ -205,7 +205,8 @@ size_t      srr_request_size(const srr_request_t *request);
  * Single-winner: only the first call to reply/reply_error succeeds.
  * If client timed out or disconnected before reply, returns SRR_TIMEOUT
  * or SRR_DISCONNECTED to inform server.
- * Automatically disposes the request handle.
+ * Ownership transfer: this call consumes and disposes the request handle.
+ * The request pointer must not be used or disposed after calling this function.
  */
 srr_status_t srr_reply(
     srr_request_t *request,
@@ -215,7 +216,8 @@ srr_status_t srr_reply(
 /*
  * Reply to client with an explicit error code.
  * Client's srr_send() will return this status code.
- * Automatically disposes the request handle.
+ * Ownership transfer: this call consumes and disposes the request handle.
+ * The request pointer must not be used or disposed after calling this function.
  */
 srr_status_t srr_reply_error(
     srr_request_t *request,
@@ -225,7 +227,8 @@ srr_status_t srr_reply_error(
  * Explicitly abandon / dispose an unanswered request or pulse.
  * If client is still waiting, client's srr_send() will wake with SRR_CANCELLED.
  * For pulses, frees pulse resources.
- * Safe to call on already replied requests (no-op).
+ * Note: Do NOT call this on requests already passed to srr_reply() or srr_reply_error(),
+ * as those functions already consume and release the request handle.
  */
 void srr_request_dispose(srr_request_t *request);
 

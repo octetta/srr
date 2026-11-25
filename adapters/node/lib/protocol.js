@@ -40,6 +40,153 @@ function srrCrc16(buf, initCrc = 0xFFFF) {
 }
 
 /**
+ * Consistent Overhead Byte Stuffing (COBS) encoder.
+ */
+function cobsEncode(buf) {
+  const src = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
+  const out = [1];
+  let codeIdx = 0;
+  let code = 1;
+
+  for (let i = 0; i < src.length; i++) {
+    const b = src[i];
+    if (b === 0) {
+      out[codeIdx] = code;
+      code = 1;
+      codeIdx = out.length;
+      out.push(1);
+    } else {
+      out.push(b);
+      code++;
+      if (code === 0xFF) {
+        out[codeIdx] = code;
+        code = 1;
+        codeIdx = out.length;
+        out.push(1);
+      }
+    }
+  }
+  out[codeIdx] = code;
+  return Buffer.from(out);
+}
+
+/**
+ * Consistent Overhead Byte Stuffing (COBS) decoder.
+ */
+function cobsDecode(buf) {
+  const src = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
+  if (src.length === 0) return Buffer.alloc(0);
+  const out = [];
+  let i = 0;
+  const n = src.length;
+
+  while (i < n) {
+    const code = src[i++];
+    if (code === 0) throw new Error('srr: zero byte inside COBS data');
+    for (let j = 1; j < code; j++) {
+      if (i >= n) throw new Error('srr: truncated COBS stream');
+      out.push(src[i++]);
+    }
+    if (code < 0xFF && i < n) {
+      out.push(0);
+    }
+  }
+  return Buffer.from(out);
+}
+
+/**
+ * Encodes a COBS-framed wire packet terminated by 0x00 delimiter.
+ */
+function encodeWireFrame({
+  msgType = SRR_MSG_REQUEST,
+  serviceId = 0,
+  operationId = 0,
+  sessionId = 0,
+  transId = 0,
+  payload = '',
+  flags = 0
+}) {
+  const payloadBuf = Buffer.isBuffer(payload) ? payload : Buffer.from(payload || '');
+  const raw = Buffer.alloc(WIRE_HEADER_SIZE + payloadBuf.length);
+
+  raw.writeUInt32LE(SRR_WIRE_MAGIC, 0);
+  raw.writeUInt16LE(SRR_WIRE_VERSION, 4);
+  raw.writeUInt16LE(msgType, 6);
+  raw.writeUInt16LE(flags, 8);
+  raw.writeUInt16LE(serviceId, 10);
+  raw.writeUInt16LE(operationId, 12);
+  raw.writeUInt16LE(0, 14); // reserved
+  raw.writeUInt32LE(sessionId, 16);
+  raw.writeBigUInt64LE(BigInt(transId), 20);
+  raw.writeUInt32LE(payloadBuf.length, 28);
+
+  if (payloadBuf.length > 0) {
+    payloadBuf.copy(raw, WIRE_HEADER_SIZE);
+  }
+
+  const crc = srrCrc16(raw);
+  const crcBuf = Buffer.alloc(2);
+  crcBuf.writeUInt16LE(crc, 0);
+
+  const unencoded = Buffer.concat([raw, crcBuf]);
+  const cobsBuf = cobsEncode(unencoded);
+  return Buffer.concat([cobsBuf, Buffer.from([0x00])]);
+}
+
+/**
+ * Decodes a COBS-framed wire packet terminated by 0x00 delimiter.
+ */
+function decodeWireFrame(frame) {
+  const buf = Buffer.isBuffer(frame) ? frame : Buffer.from(frame);
+  if (buf.length === 0 || buf[buf.length - 1] !== 0x00) {
+    throw new Error('srr: frame must end with 0x00 delimiter');
+  }
+  const unencoded = cobsDecode(buf.slice(0, -1));
+  if (unencoded.length < WIRE_HEADER_SIZE + CRC_SIZE) {
+    throw new Error('srr: decoded frame too short');
+  }
+  const body = unencoded.slice(0, -CRC_SIZE);
+  const expectedCrc = unencoded.readUInt16LE(unencoded.length - CRC_SIZE);
+  const calcCrc = srrCrc16(body);
+  if (expectedCrc !== calcCrc) {
+    throw new Error(`srr: CRC-16 mismatch: expected ${calcCrc}, got ${expectedCrc}`);
+  }
+
+  const magic = body.readUInt32LE(0);
+  if (magic !== SRR_WIRE_MAGIC) throw new Error('srr: invalid magic');
+  const ver = body.readUInt16LE(4);
+  if (ver !== SRR_WIRE_VERSION) throw new Error('srr: invalid version');
+
+  const msgType = body.readUInt16LE(6);
+  const flags = body.readUInt16LE(8);
+  const serviceId = body.readUInt16LE(10);
+  const operationId = body.readUInt16LE(12);
+  const sessionId = body.readUInt32LE(16);
+  const transId = body.readBigUInt64LE(20);
+  const payloadLen = body.readUInt32LE(28);
+
+  const payload = body.slice(WIRE_HEADER_SIZE);
+  if (payload.length !== payloadLen) {
+    throw new Error('srr: payload length mismatch');
+  }
+
+  return {
+    header: {
+      magic,
+      version: ver,
+      msgType,
+      flags,
+      serviceId,
+      operationId,
+      sessionId,
+      transId: Number(transId),
+      payloadLen
+    },
+    payload
+  };
+}
+
+/**
  * Encodes a 24-byte IPC request frame.
  */
 function encodeIpcRequest(transId, payload) {
@@ -209,6 +356,10 @@ module.exports = {
   WIRE_HEADER_SIZE,
   CRC_SIZE,
   srrCrc16,
+  cobsEncode,
+  cobsDecode,
+  encodeWireFrame,
+  decodeWireFrame,
   encodeIpcRequest,
   encodeIpcPulse,
   encodeIpcGoodbye,

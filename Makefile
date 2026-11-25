@@ -13,12 +13,12 @@ SRC     := src/srr_pthread.c src/srr_ipc.c src/srr_wire.c src/srr_serial.c src/s
 OBJ     := $(SRC:.c=.o)
 LIB     := libsrr.a
 
-TEST_SRCS := tests/test_srr_basic.c tests/test_srr_races.c tests/test_srr_stress.c tests/test_srr_ipc.c tests/test_srr_wire.c tests/test_srr_embedded.c tests/test_srr_serial.c tests/test_srr_tiny.c tests/test_srr_esp32.c tests/test_srr_p1.c tests/test_srr_udp.c tests/test_srr_resolver.c
+TEST_SRCS := tests/test_srr_basic.c tests/test_srr_races.c tests/test_srr_stress.c tests/test_srr_ipc.c tests/test_srr_wire.c tests/test_srr_embedded.c tests/test_srr_serial.c tests/test_srr_tiny.c tests/test_srr_esp32.c tests/test_srr_p1.c tests/test_srr_udp.c tests/test_srr_resolver.c tests/test_srr_audit_regressions.c
 TEST_BINS := $(TEST_SRCS:.c=)
 
 # Default target displays help
 .DEFAULT_GOAL := help
-.PHONY: help all lib shared examples tools beam test-beam win32 test test-valgrind test-adapters test-scripts test-all bench clean
+.PHONY: help all lib shared examples tools beam test-beam win32 test test-asan test-tsan test-ubsan test-valgrind test-conformance test-adapters test-scripts test-all bench clean
 
 # ------------------------------------------------------------------------------
 # Help Target
@@ -130,7 +130,28 @@ test: $(LIB) $(TEST_BINS)
 	./tests/test_srr_p1
 	./tests/test_srr_udp
 	./tests/test_srr_resolver
+	./tests/test_srr_audit_regressions
+	python3 tests/conformance/test_conformance.py
 	@echo "All native tests passed!"
+
+test-asan:
+	@echo "--- Building and Running with AddressSanitizer & UndefinedBehaviorSanitizer ---"
+	$(MAKE) clean
+	$(MAKE) CC="$(CC)" CFLAGS="$(CFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer -g" test
+
+test-tsan:
+	@echo "--- Building and Running with ThreadSanitizer ---"
+	$(MAKE) clean
+	$(MAKE) CC="$(CC)" CFLAGS="$(CFLAGS) -fsanitize=thread -fno-omit-frame-pointer -g" test
+
+test-ubsan:
+	@echo "--- Building and Running with UndefinedBehaviorSanitizer ---"
+	$(MAKE) clean
+	$(MAKE) CC="$(CC)" CFLAGS="$(CFLAGS) -fsanitize=undefined -fno-omit-frame-pointer -g" test
+
+test-conformance: $(LIB)
+	@echo "--- Running Protocol Conformance Test Vectors ---"
+	python3 tests/conformance/test_conformance.py
 
 test-valgrind: $(LIB) $(TEST_BINS)
 	@echo "--- Running Valgrind Leak & Memory Checks ---"
@@ -146,6 +167,7 @@ test-valgrind: $(LIB) $(TEST_BINS)
 	valgrind --leak-check=full --error-exitcode=1 ./tests/test_srr_p1
 	valgrind --leak-check=full --error-exitcode=1 ./tests/test_srr_udp
 	valgrind --leak-check=full --error-exitcode=1 ./tests/test_srr_resolver
+	valgrind --leak-check=full --error-exitcode=1 ./tests/test_srr_audit_regressions
 	@echo "All Valgrind checks passed with 0 errors and 0 leaks!"
 
 test-beam: examples beam
@@ -197,7 +219,7 @@ benchmarks/%: benchmarks/%.c $(LIB)
 # ------------------------------------------------------------------------------
 
 clean:
-	rm -f src/*.o src/*.win.o tests/test_srr_basic tests/test_srr_races tests/test_srr_stress tests/test_srr_ipc tests/test_srr_wire tests/test_srr_embedded tests/test_srr_serial tests/test_srr_tiny tests/test_srr_esp32 tests/test_srr_p1 tests/test_srr_udp tests/test_srr_resolver tests/*.exe
+	rm -f src/*.o src/*.win.o tests/test_srr_basic tests/test_srr_races tests/test_srr_stress tests/test_srr_ipc tests/test_srr_wire tests/test_srr_embedded tests/test_srr_serial tests/test_srr_tiny tests/test_srr_esp32 tests/test_srr_p1 tests/test_srr_udp tests/test_srr_resolver tests/test_srr_audit_regressions tests/conformance/test_c_vectors tests/conformance/generate_vectors tests/*.exe
 	rm -f benchmarks/bench_srr benchmarks/*.exe
 	rm -f examples/synth_engine/synth_server examples/synth_engine/synth_cli
 	rm -f examples/pico/pico_device_sim examples/pico/pico_host_cli

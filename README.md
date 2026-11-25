@@ -228,13 +228,22 @@ make all
 # Run all 12 native unit and integration test suites
 make test
 
-# Run all 12 test suites under Valgrind (0 errors, 0 memory leaks check)
+# Run all 13 test suites under Valgrind (0 errors, 0 memory leaks check)
 make test-valgrind
+
+# Run cross-language protocol conformance suite
+make test-conformance
+
+# Run AddressSanitizer and UndefinedBehaviorSanitizer
+make test-asan
+
+# Run ThreadSanitizer
+make test-tsan
 
 # Run BEAM (Erlang, Elixir, Gleam) integration tests
 make test-beam
 
-# Run full adapter suite (BEAM + WebAudio browser gateway)
+# Run full adapter suite (BEAM + WebAudio browser gateway + native adapters)
 make test-adapters
 
 # Execute complete verification suite
@@ -251,6 +260,9 @@ make win32
 
 ## Documentation Index
 
+- **[Correctness & Concurrency Audit Report](docs/CORRECTNESS_AUDIT.md):** Detailed analysis of resolved defects, concurrency state arbitration, lifetime rules, regression tests, and operational risk assessment.
+- **[Protocol Conformance Specification](docs/PROTOCOL_CONFORMANCE.md):** Formal specification distinguishing 24-byte IPC streaming framing from 32-byte Device Wire framing, byte ordering, CRC-16, COBS, and cross-language conformance matrix.
+- **[Platform Verification & Resource Report](docs/PLATFORM_VERIFICATION.md):** Truthful resource budgets, compiler reports, and distinction between host emulation and physical target hardware for RP2040 Pico, ESP32, AVR, and Parallax P1.
 - **[Emulators, Virtual Targets & FFI Guide](docs/EMULATORS_AND_VIRTUAL_TARGETS.md):** How to run AVR (simavr), Pico, ESP32, and Parallax P1 (Spin/spinsim) on Fedora without physical hardware, plus scripting FFI guide (`libsrr.so`).
 - **[Composing Distributed Systems with SRR](docs/COMPOSING_SYSTEMS_WITH_SRR.md):** Complete architectural guide on system topologies, dynamic resolvers, mesh federation, and real-world case studies (synthesizers, robotics, industrial control).
 - **[BEAM Inter-Op Guide (Erlang / Elixir / Gleam)](adapters/beam/README.md):** Native Unix Domain Socket `gen_server`, port drivers, Elixir Hex package, and Gleam bitstring framing.

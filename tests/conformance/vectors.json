@@ -1,0 +1,27 @@
+{
+  "crc16": [
+    {"name": "123456789", "hex_input": "313233343536373839", "expected_crc": 10673},
+    {"name": "SRR1", "hex_input": "53525231", "expected_crc": 5158},
+    {"name": "empty", "hex_input": "", "expected_crc": 65535},
+    {"name": "four_zeros", "hex_input": "00000000", "expected_crc": 33984},
+    {"name": "pattern_55aa", "hex_input": "55aa55aa", "expected_crc": 53769}
+  ],
+  "cobs": [
+    {"name": "single_zero", "raw_hex": "00", "encoded_hex": "0101"},
+    {"name": "two_zeros", "raw_hex": "0000", "encoded_hex": "010101"},
+    {"name": "digits", "raw_hex": "0102030405", "encoded_hex": "060102030405"},
+    {"name": "mixed", "raw_hex": "00010000020304000500", "encoded_hex": "0102010104020304020501"}
+  ],
+  "ipc_frames": [
+    {"name": "ipc_request_ping", "type": "request", "trans_id": 42, "hex": "3152525301000200000000002a000000000000000400000050494e47"},
+    {"name": "ipc_reply_pong", "type": "reply", "trans_id": 42, "hex": "3152525301000300000000002a0000000000000004000000504f4e47"},
+    {"name": "ipc_pulse_1", "type": "pulse", "code": 1, "value": 123456789, "hex": "315252530100050000000000000000000000000010000000010000000000000015cd5b0700000000"},
+    {"name": "ipc_error_cancelled", "type": "error", "trans_id": 42, "status": 2, "hex": "3152525301000400000000002a00000000000000080000000200000000000000"},
+    {"name": "ipc_goodbye", "type": "goodbye", "hex": "315252530100070000000000000000000000000000000000"}
+  ],
+  "wire_frames": [
+    {"name": "wire_request", "service_id": 42, "op_id": 7, "session_id": 1001, "trans_id": 999999, "cobs_delimited_hex": "06315252530102020101022a0207010103e90301043f420f01010101020901010c68656c6c6f5f737272ce3e00"},
+    {"name": "wire_reply", "service_id": 42, "op_id": 7, "session_id": 1001, "trans_id": 999999, "cobs_delimited_hex": "06315252530102030101022a0207010103e90301043f420f010101010205010108776f726c648e0f00"},
+    {"name": "wire_error", "service_id": 42, "op_id": 7, "session_id": 1001, "trans_id": 999999, "flags": 7, "cobs_delimited_hex": "06315252530102040207022a0207010103e90301043f420f010101010101010103a8e700"}
+  ]
+}

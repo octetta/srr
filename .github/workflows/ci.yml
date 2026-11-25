@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  verification:
+    name: Build & Verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            valgrind \
+            python3 \
+            perl \
+            nodejs \
+            ruby \
+            php-cli \
+            tcl
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Run standard native test suite
+        run: make test
+
+      - name: Run Valgrind memory leak checks
+        run: make test-valgrind
+
+      - name: Run AddressSanitizer & UndefinedBehaviorSanitizer
+        run: make test-asan
+
+      - name: Run ThreadSanitizer
+        run: make test-tsan
+
+      - name: Run cross-language protocol conformance
+        run: make test-conformance
+
+      - name: Run language adapter integration tests
+        run: make test-adapters
+
+      - name: Run scripting automation tests
+        run: make test-scripts

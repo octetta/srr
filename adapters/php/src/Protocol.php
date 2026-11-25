@@ -34,6 +34,106 @@ class Protocol {
         return $crc;
     }
 
+    public static function cobsEncode(string $data): string {
+        $len = strlen($data);
+        $out = [1];
+        $code_idx = 0;
+        $code = 1;
+        for ($i = 0; $i < $len; $i++) {
+            $b = ord($data[$i]);
+            if ($b === 0) {
+                $out[$code_idx] = $code;
+                $code = 1;
+                $code_idx = count($out);
+                $out[] = 1;
+            } else {
+                $out[] = $b;
+                $code++;
+                if ($code === 0xFF) {
+                    $out[$code_idx] = $code;
+                    $code = 1;
+                    $code_idx = count($out);
+                    $out[] = 1;
+                }
+            }
+        }
+        $out[$code_idx] = $code;
+        return pack("C*", ...$out);
+    }
+
+    public static function cobsDecode(string $data): string {
+        $len = strlen($data);
+        if ($len === 0) return "";
+        $out = [];
+        $i = 0;
+        while ($i < $len) {
+            $code = ord($data[$i++]);
+            if ($code === 0) throw new \UnexpectedValueException("Zero byte inside COBS data");
+            for ($j = 1; $j < $code; $j++) {
+                if ($i >= $len) throw new \UnexpectedValueException("Truncated COBS stream");
+                $out[] = ord($data[$i++]);
+            }
+            if ($code < 0xFF && $i < $len) {
+                $out[] = 0;
+            }
+        }
+        return pack("C*", ...$out);
+    }
+
+    public static function encodeWireFrame(
+        int $msg_type,
+        int $service_id,
+        int $operation_id,
+        int $session_id,
+        int $trans_id,
+        string $payload = "",
+        int $flags = 0
+    ): string {
+        $hdr = pack("VvvvvvvVPV", self::MAGIC, self::VERSION, $msg_type, $flags, $service_id, $operation_id, 0, $session_id, $trans_id, strlen($payload));
+        $raw = $hdr . $payload;
+        $crc = self::crc16($raw);
+        $unencoded = $raw . pack("v", $crc);
+        return self::cobsEncode($unencoded) . "\x00";
+    }
+
+    public static function decodeWireFrame(string $frame): array {
+        if (strlen($frame) === 0 || substr($frame, -1) !== "\x00") {
+            throw new \InvalidArgumentException("Frame must end with 0x00 delimiter");
+        }
+        $unencoded = self::cobsDecode(substr($frame, 0, -1));
+        if (strlen($unencoded) < self::WIRE_HEADER_SIZE + self::CRC_SIZE) {
+            throw new \InvalidArgumentException("Decoded frame too short");
+        }
+        $body = substr($unencoded, 0, -self::CRC_SIZE);
+        $expected_crc = unpack("v", substr($unencoded, -self::CRC_SIZE))[1];
+        $calc_crc = self::crc16($body);
+        if ($expected_crc !== $calc_crc) {
+            throw new \UnexpectedValueException("CRC-16 mismatch: expected $calc_crc, got $expected_crc");
+        }
+
+        $fields = unpack("Vmagic/vver/vtype/vflags/vs_id/vop_id/vres/Vsess_id/Ptid/Vlen", substr($body, 0, self::WIRE_HEADER_SIZE));
+        if ($fields['magic'] !== self::MAGIC) throw new \UnexpectedValueException("Invalid magic");
+        if ($fields['ver'] !== self::VERSION) throw new \UnexpectedValueException("Invalid version");
+
+        $payload = substr($body, self::WIRE_HEADER_SIZE, $fields['len']);
+        if (strlen($payload) !== $fields['len']) throw new \UnexpectedValueException("Payload length mismatch");
+
+        return [
+            'header' => [
+                'magic'        => $fields['magic'],
+                'version'      => $fields['ver'],
+                'msg_type'     => $fields['type'],
+                'flags'        => $fields['flags'],
+                'service_id'   => $fields['s_id'],
+                'operation_id' => $fields['op_id'],
+                'session_id'   => $fields['sess_id'],
+                'trans_id'     => $fields['tid'],
+                'payload_len'  => $fields['len'],
+            ],
+            'payload' => $payload
+        ];
+    }
+
     public static function encodeIpcRequest(int $trans_id, string $payload): string {
         $hdr = pack("VvvVPV", self::MAGIC, self::VERSION, self::MSG_REQUEST, 0, $trans_id, strlen($payload));
         return $hdr . $payload;

@@ -27,6 +27,10 @@ int srr_ipc_resolve_path(const char *service_name, char *out_path, size_t out_pa
     return 0;
 }
 
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
+
 int srr_ipc_write_all(intptr_t handle, const void *buf, size_t len, int timeout_ms) {
     int fd = (int)handle;
     const uint8_t *p = (const uint8_t *)buf;
@@ -40,7 +44,7 @@ int srr_ipc_write_all(intptr_t handle, const void *buf, size_t len, int timeout_
                 return (ret == 0) ? -2 : -1; /* -2 = timeout, -1 = error */
             }
         }
-        ssize_t n = write(fd, p, remaining);
+        ssize_t n = send(fd, p, remaining, MSG_NOSIGNAL);
         if (n < 0) {
             if (errno == EINTR) continue;
             return -1;

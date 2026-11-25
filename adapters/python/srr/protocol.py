@@ -45,6 +45,110 @@ def srr_crc16(data: bytes, init_crc: int = 0xFFFF) -> int:
     return crc
 
 
+def cobs_encode(data: bytes) -> bytes:
+    """Consistent Overhead Byte Stuffing (COBS) encoder."""
+    out = bytearray([1])
+    code_idx = 0
+    code = 1
+    for b in data:
+        if b == 0:
+            out[code_idx] = code
+            code = 1
+            code_idx = len(out)
+            out.append(1)
+        else:
+            out.append(b)
+            code += 1
+            if code == 0xFF:
+                out[code_idx] = code
+                code = 1
+                code_idx = len(out)
+                out.append(1)
+    out[code_idx] = code
+    return bytes(out)
+
+
+def cobs_decode(data: bytes) -> bytes:
+    """Consistent Overhead Byte Stuffing (COBS) decoder."""
+    out = bytearray()
+    i, n = 0, len(data)
+    while i < n:
+        code = data[i]
+        i += 1
+        if code == 0:
+            raise ValueError("Zero byte encountered inside COBS data")
+        for _ in range(1, code):
+            if i >= n:
+                raise ValueError("Truncated COBS stream")
+            out.append(data[i])
+            i += 1
+        if code < 0xFF and i < n:
+            out.append(0)
+    return bytes(out)
+
+
+def encode_wire_frame(
+    msg_type: int,
+    service_id: int,
+    operation_id: int,
+    session_id: int,
+    trans_id: int,
+    payload: bytes = b"",
+    flags: int = 0,
+) -> bytes:
+    """Encodes a complete COBS-framed wire packet terminated by 0x00 delimiter."""
+    hdr = struct.pack(
+        WIRE_HEADER_FMT,
+        SRR_WIRE_MAGIC,
+        SRR_WIRE_VERSION,
+        msg_type,
+        flags,
+        service_id,
+        operation_id,
+        0,  # reserved
+        session_id,
+        trans_id,
+        len(payload),
+    )
+    raw = hdr + payload
+    crc = srr_crc16(raw, 0xFFFF)
+    return cobs_encode(raw + struct.pack("<H", crc)) + b"\x00"
+
+
+def decode_wire_frame(frame: bytes) -> Tuple[Dict[str, Any], bytes]:
+    """Decodes a COBS-framed wire packet terminated by 0x00 delimiter."""
+    if not frame or frame[-1:] != b"\x00":
+        raise ValueError("Frame must end with 0x00 delimiter")
+    un_cobs = cobs_decode(frame[:-1])
+    min_len = WIRE_HEADER_SIZE + CRC_SIZE
+    if len(un_cobs) < min_len:
+        raise ValueError(f"Decoded wire frame too short: {len(un_cobs)} bytes")
+    body = un_cobs[:-CRC_SIZE]
+    received_crc = struct.unpack("<H", un_cobs[-CRC_SIZE:])[0]
+    calc_crc = srr_crc16(body, 0xFFFF)
+    if received_crc != calc_crc:
+        raise ValueError(f"CRC-16 mismatch: expected {hex(calc_crc)}, got {hex(received_crc)}")
+    fields = struct.unpack(WIRE_HEADER_FMT, body[:WIRE_HEADER_SIZE])
+    magic, ver, msg_type, flags, s_id, op_id, res, sess_id, tid, plen = fields
+    if magic != SRR_WIRE_MAGIC or ver != SRR_WIRE_VERSION:
+        raise ValueError("Invalid magic or version in wire header")
+    payload = body[WIRE_HEADER_SIZE:]
+    if len(payload) != plen:
+        raise ValueError(f"Payload length mismatch: header says {plen}, got {len(payload)}")
+    hdr_dict = {
+        "magic": magic,
+        "version": ver,
+        "msg_type": msg_type,
+        "flags": flags,
+        "service_id": s_id,
+        "operation_id": op_id,
+        "session_id": sess_id,
+        "trans_id": tid,
+        "payload_len": plen,
+    }
+    return hdr_dict, payload
+
+
 def encode_ipc_request(trans_id: int, payload: bytes) -> bytes:
     """Encodes a synchronous request frame for Unix Domain Sockets."""
     hdr = struct.pack(

@@ -79,16 +79,27 @@ srr_parser_status_t srr_tiny_feed_byte(srr_tiny_endpoint_t *ep, uint8_t byte) {
         rep_hdr.service_id = in_hdr.service_id;
         rep_hdr.operation_id = in_hdr.operation_id;
 
+        /* Reject oversized requests instead of silently truncating */
+        if (in_hdr.payload_len > SRR_TINY_MAX_PAYLOAD) {
+            rep_hdr.msg_type = SRR_WIRE_ERROR;
+            rep_hdr.flags = 7; /* SRR_TOO_LARGE */
+            rep_hdr.payload_len = 0;
+            size_t enc = srr_wire_encode_frame(&rep_hdr, NULL, 0, ep->tx_buf, sizeof(ep->tx_buf));
+            if (enc > 0 && ep->tx_fn) {
+                ep->tx_fn(ep->tx_buf, enc, ep->tx_user_data);
+            }
+            return SRR_PARSER_FRAME_READY;
+        }
+
         uint8_t rep_len = 0;
         int handler_rc = -1;
 
         if (handler) {
-            uint8_t safe_req_len = (uint8_t)(in_hdr.payload_len < SRR_TINY_MAX_PAYLOAD ? in_hdr.payload_len : SRR_TINY_MAX_PAYLOAD);
             handler_rc = handler(
                 in_hdr.service_id,
                 in_hdr.operation_id,
                 in_payload,
-                safe_req_len,
+                (uint8_t)in_hdr.payload_len,
                 ep->server_rep_buf,
                 sizeof(ep->server_rep_buf),
                 &rep_len,
@@ -97,11 +108,21 @@ srr_parser_status_t srr_tiny_feed_byte(srr_tiny_endpoint_t *ep, uint8_t byte) {
         }
 
         if (handler && handler_rc == 0) {
-            rep_hdr.msg_type = SRR_WIRE_REPLY;
-            rep_hdr.payload_len = rep_len;
-            size_t enc = srr_wire_encode_frame(&rep_hdr, ep->server_rep_buf, rep_len, ep->tx_buf, sizeof(ep->tx_buf));
-            if (enc > 0 && ep->tx_fn) {
-                ep->tx_fn(ep->tx_buf, enc, ep->tx_user_data);
+            if (rep_len > sizeof(ep->server_rep_buf)) {
+                rep_hdr.msg_type = SRR_WIRE_ERROR;
+                rep_hdr.flags = 7; /* SRR_TOO_LARGE */
+                rep_hdr.payload_len = 0;
+                size_t enc = srr_wire_encode_frame(&rep_hdr, NULL, 0, ep->tx_buf, sizeof(ep->tx_buf));
+                if (enc > 0 && ep->tx_fn) {
+                    ep->tx_fn(ep->tx_buf, enc, ep->tx_user_data);
+                }
+            } else {
+                rep_hdr.msg_type = SRR_WIRE_REPLY;
+                rep_hdr.payload_len = rep_len;
+                size_t enc = srr_wire_encode_frame(&rep_hdr, ep->server_rep_buf, rep_len, ep->tx_buf, sizeof(ep->tx_buf));
+                if (enc > 0 && ep->tx_fn) {
+                    ep->tx_fn(ep->tx_buf, enc, ep->tx_user_data);
+                }
             }
         } else {
             rep_hdr.msg_type = SRR_WIRE_ERROR;

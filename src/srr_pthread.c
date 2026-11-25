@@ -33,11 +33,19 @@ srr_request_t *srr_request_alloc(srr_backend_type_t backend, srr_item_type_t typ
         free(req);
         return NULL;
     }
-    if (pthread_cond_init(&req->cond, NULL) != 0) {
+
+    pthread_condattr_t cattr;
+    pthread_condattr_init(&cattr);
+#ifndef _WIN32
+    pthread_condattr_setclock(&cattr, CLOCK_MONOTONIC);
+#endif
+    if (pthread_cond_init(&req->cond, &cattr) != 0) {
+        pthread_condattr_destroy(&cattr);
         pthread_mutex_destroy(&req->lock);
         free(req);
         return NULL;
     }
+    pthread_condattr_destroy(&cattr);
 
     req->backend = backend;
     req->type = type;
@@ -77,7 +85,7 @@ void srr_request_release(srr_request_t *req) {
     }
 }
 
-bool srr_request_complete_terminal(srr_request_t *req, srr_trans_state_t term_state, srr_status_t status) {
+bool srr_request_complete_terminal(srr_request_t *req, srr_req_state_t term_state, srr_status_t status) {
     if (!req) return false;
     pthread_mutex_lock(&req->lock);
     if (req->state >= SRR_STATE_REPLIED) {
@@ -203,6 +211,20 @@ srr_status_t srr_channel_close(srr_channel_t *channel) {
         if (curr->type == SRR_ITEM_REQUEST) {
             if (curr->backend == SRR_BACKEND_THREAD) {
                 srr_request_complete_terminal(curr, SRR_STATE_SERVER_DIED, SRR_SERVER_DIED);
+            } else if (curr->backend == SRR_BACKEND_IPC && curr->ipc_client_lock) {
+                pthread_mutex_lock(curr->ipc_client_lock);
+                srr_frame_header_t err_hdr = {
+                    .magic = SRR_PROTO_MAGIC,
+                    .version = SRR_PROTO_VERSION,
+                    .msg_type = SRR_MSG_ERROR,
+                    .flags = 0,
+                    .trans_id = curr->ipc_trans_id,
+                    .payload_len = sizeof(srr_error_payload_t)
+                };
+                srr_error_payload_t err_pl = { .error_status = (uint32_t)SRR_SERVER_DIED, ._reserved = 0 };
+                srr_ipc_write_all(curr->ipc_client_handle, &err_hdr, sizeof(err_hdr), 1000);
+                srr_ipc_write_all(curr->ipc_client_handle, &err_pl, sizeof(err_pl), 1000);
+                pthread_mutex_unlock(curr->ipc_client_lock);
             }
         }
         srr_request_release(curr);
@@ -392,29 +414,27 @@ void srr_disconnect(srr_connection_t *connection) {
     if (!connection) return;
 
     pthread_mutex_lock(&connection->send_lock);
-    if (!connection->connected) {
-        pthread_mutex_unlock(&connection->send_lock);
-        return;
-    }
-
+    bool was_connected = connection->connected;
     connection->connected = false;
 
     if (connection->is_ipc) {
-        srr_frame_header_t bye = {
-            .magic = SRR_PROTO_MAGIC,
-            .version = SRR_PROTO_VERSION,
-            .msg_type = SRR_MSG_GOODBYE,
-            .flags = 0,
-            .trans_id = 0,
-            .payload_len = 0
-        };
-        srr_ipc_write_all(connection->ipc_handle, &bye, sizeof(bye), 1000);
+        if (was_connected && connection->ipc_handle) {
+            srr_frame_header_t bye = {
+                .magic = SRR_PROTO_MAGIC,
+                .version = SRR_PROTO_VERSION,
+                .msg_type = SRR_MSG_GOODBYE,
+                .flags = 0,
+                .trans_id = 0,
+                .payload_len = 0
+            };
+            srr_ipc_write_all(connection->ipc_handle, &bye, sizeof(bye), 1000);
 #ifdef _WIN32
-        CloseHandle((HANDLE)connection->ipc_handle);
+            CloseHandle((HANDLE)connection->ipc_handle);
 #else
-        close((int)connection->ipc_handle);
+            close((int)connection->ipc_handle);
 #endif
-        connection->ipc_handle = 0;
+            connection->ipc_handle = 0;
+        }
         pthread_mutex_unlock(&connection->send_lock);
         pthread_mutex_destroy(&connection->send_lock);
         free(connection);
@@ -433,7 +453,11 @@ void srr_disconnect(srr_connection_t *connection) {
 }
 
 static void compute_timespec(uint32_t timeout_ms, struct timespec *ts) {
+#ifdef _WIN32
     clock_gettime(CLOCK_REALTIME, ts);
+#else
+    clock_gettime(CLOCK_MONOTONIC, ts);
+#endif
     uint64_t nsec = (uint64_t)ts->tv_nsec + ((uint64_t)timeout_ms * 1000000ULL);
     ts->tv_sec += (time_t)(nsec / 1000000000ULL);
     ts->tv_nsec = (long)(nsec % 1000000000ULL);
@@ -485,17 +509,54 @@ srr_status_t srr_send_timed(
         srr_frame_header_t rep_hdr;
         int rrc = srr_ipc_read_all(h, &rep_hdr, sizeof(rep_hdr), (timeout_ms > 0) ? (int)timeout_ms : -1);
         if (rrc == -2) {
+            /* Timeout on stream connection: connection stream is now indeterminate because
+             * the server may deliver the reply at any point in the future.
+             * Close socket and mark disconnected so future calls do not read stale bytes. */
+            connection->connected = false;
+#ifdef _WIN32
+            CloseHandle((HANDLE)connection->ipc_handle);
+#else
+            close((int)connection->ipc_handle);
+#endif
+            connection->ipc_handle = 0;
             pthread_mutex_unlock(&connection->send_lock);
             return SRR_TIMEOUT;
         }
         if (rrc != 0 || rep_hdr.magic != SRR_PROTO_MAGIC) {
+            connection->connected = false;
+#ifdef _WIN32
+            CloseHandle((HANDLE)connection->ipc_handle);
+#else
+            close((int)connection->ipc_handle);
+#endif
+            connection->ipc_handle = 0;
             pthread_mutex_unlock(&connection->send_lock);
             return SRR_DISCONNECTED;
+        }
+
+        if (rep_hdr.trans_id != tid) {
+            /* Mismatched transaction ID: stream protocol violation or desynchronization */
+            connection->connected = false;
+#ifdef _WIN32
+            CloseHandle((HANDLE)connection->ipc_handle);
+#else
+            close((int)connection->ipc_handle);
+#endif
+            connection->ipc_handle = 0;
+            pthread_mutex_unlock(&connection->send_lock);
+            return SRR_PROTOCOL_ERROR;
         }
 
         if (rep_hdr.msg_type == SRR_MSG_ERROR) {
             srr_error_payload_t err_pl;
             if (srr_ipc_read_all(h, &err_pl, sizeof(err_pl), 5000) != 0) {
+                connection->connected = false;
+#ifdef _WIN32
+                CloseHandle((HANDLE)connection->ipc_handle);
+#else
+                close((int)connection->ipc_handle);
+#endif
+                connection->ipc_handle = 0;
                 pthread_mutex_unlock(&connection->send_lock);
                 return SRR_DISCONNECTED;
             }
@@ -762,31 +823,45 @@ srr_status_t srr_reply(
         return SRR_INVALID;
     }
 
-    if (request->backend == SRR_BACKEND_IPC) {
-        pthread_mutex_lock(request->ipc_client_lock);
-        srr_frame_header_t rep_hdr = {
-            .magic = SRR_PROTO_MAGIC,
-            .version = SRR_PROTO_VERSION,
-            .msg_type = SRR_MSG_REPLY,
-            .flags = 0,
-            .trans_id = request->ipc_trans_id,
-            .payload_len = (uint32_t)reply_size
-        };
-        srr_ipc_write_all(request->ipc_client_handle, &rep_hdr, sizeof(rep_hdr), 5000);
-        if (reply_size > 0 && reply_data) {
-            srr_ipc_write_all(request->ipc_client_handle, reply_data, reply_size, 5000);
-        }
-        pthread_mutex_unlock(request->ipc_client_lock);
-        srr_request_release(request);
-        return SRR_OK;
-    }
-
+    /* Single-winner transaction state arbitration */
     pthread_mutex_lock(&request->lock);
     if (request->state >= SRR_STATE_REPLIED) {
         srr_status_t past_status = request->terminal_status;
         pthread_mutex_unlock(&request->lock);
         srr_request_release(request);
         return past_status;
+    }
+
+    if (request->backend == SRR_BACKEND_IPC) {
+        request->state = SRR_STATE_REPLIED;
+        request->terminal_status = SRR_OK;
+        pthread_mutex_unlock(&request->lock);
+
+        srr_status_t write_status = SRR_OK;
+        if (request->ipc_client_lock) {
+            pthread_mutex_lock(request->ipc_client_lock);
+            srr_frame_header_t rep_hdr = {
+                .magic = SRR_PROTO_MAGIC,
+                .version = SRR_PROTO_VERSION,
+                .msg_type = SRR_MSG_REPLY,
+                .flags = 0,
+                .trans_id = request->ipc_trans_id,
+                .payload_len = (uint32_t)reply_size
+            };
+            if (srr_ipc_write_all(request->ipc_client_handle, &rep_hdr, sizeof(rep_hdr), 5000) != 0) {
+                write_status = SRR_DISCONNECTED;
+            } else if (reply_size > 0 && reply_data) {
+                if (srr_ipc_write_all(request->ipc_client_handle, reply_data, reply_size, 5000) != 0) {
+                    write_status = SRR_DISCONNECTED;
+                }
+            }
+            pthread_mutex_unlock(request->ipc_client_lock);
+        } else {
+            write_status = SRR_DISCONNECTED;
+        }
+
+        srr_request_release(request);
+        return write_status;
     }
 
     if (request->out_reply_size) {
@@ -824,30 +899,43 @@ srr_status_t srr_reply_error(
         return SRR_INVALID;
     }
 
-    if (request->backend == SRR_BACKEND_IPC) {
-        pthread_mutex_lock(request->ipc_client_lock);
-        srr_frame_header_t err_hdr = {
-            .magic = SRR_PROTO_MAGIC,
-            .version = SRR_PROTO_VERSION,
-            .msg_type = SRR_MSG_ERROR,
-            .flags = 0,
-            .trans_id = request->ipc_trans_id,
-            .payload_len = sizeof(srr_error_payload_t)
-        };
-        srr_error_payload_t err_pl = { .error_status = (uint32_t)error, ._reserved = 0 };
-        srr_ipc_write_all(request->ipc_client_handle, &err_hdr, sizeof(err_hdr), 5000);
-        srr_ipc_write_all(request->ipc_client_handle, &err_pl, sizeof(err_pl), 5000);
-        pthread_mutex_unlock(request->ipc_client_lock);
-        srr_request_release(request);
-        return SRR_OK;
-    }
-
+    /* Single-winner transaction state arbitration */
     pthread_mutex_lock(&request->lock);
     if (request->state >= SRR_STATE_REPLIED) {
         srr_status_t past_status = request->terminal_status;
         pthread_mutex_unlock(&request->lock);
         srr_request_release(request);
         return past_status;
+    }
+
+    if (request->backend == SRR_BACKEND_IPC) {
+        request->state = SRR_STATE_ERROR;
+        request->terminal_status = error;
+        pthread_mutex_unlock(&request->lock);
+
+        srr_status_t write_status = SRR_OK;
+        if (request->ipc_client_lock) {
+            pthread_mutex_lock(request->ipc_client_lock);
+            srr_frame_header_t err_hdr = {
+                .magic = SRR_PROTO_MAGIC,
+                .version = SRR_PROTO_VERSION,
+                .msg_type = SRR_MSG_ERROR,
+                .flags = 0,
+                .trans_id = request->ipc_trans_id,
+                .payload_len = sizeof(srr_error_payload_t)
+            };
+            srr_error_payload_t err_pl = { .error_status = (uint32_t)error, ._reserved = 0 };
+            if (srr_ipc_write_all(request->ipc_client_handle, &err_hdr, sizeof(err_hdr), 5000) != 0 ||
+                srr_ipc_write_all(request->ipc_client_handle, &err_pl, sizeof(err_pl), 5000) != 0) {
+                write_status = SRR_DISCONNECTED;
+            }
+            pthread_mutex_unlock(request->ipc_client_lock);
+        } else {
+            write_status = SRR_DISCONNECTED;
+        }
+
+        srr_request_release(request);
+        return write_status;
     }
 
     request->terminal_status = error;
@@ -862,13 +950,29 @@ srr_status_t srr_reply_error(
 void srr_request_dispose(srr_request_t *request) {
     if (!request) return;
 
-    if (request->type == SRR_ITEM_REQUEST && request->backend == SRR_BACKEND_THREAD) {
-        pthread_mutex_lock(&request->lock);
-        if (request->state < SRR_STATE_REPLIED) {
-            request->state = SRR_STATE_CANCELLED;
-            request->terminal_status = SRR_CANCELLED;
-            pthread_cond_broadcast(&request->cond);
+    pthread_mutex_lock(&request->lock);
+    if (request->type == SRR_ITEM_REQUEST && request->state < SRR_STATE_REPLIED) {
+        request->state = SRR_STATE_CANCELLED;
+        request->terminal_status = SRR_CANCELLED;
+        pthread_cond_broadcast(&request->cond);
+        pthread_mutex_unlock(&request->lock);
+
+        if (request->backend == SRR_BACKEND_IPC && request->ipc_client_lock) {
+            pthread_mutex_lock(request->ipc_client_lock);
+            srr_frame_header_t err_hdr = {
+                .magic = SRR_PROTO_MAGIC,
+                .version = SRR_PROTO_VERSION,
+                .msg_type = SRR_MSG_ERROR,
+                .flags = 0,
+                .trans_id = request->ipc_trans_id,
+                .payload_len = sizeof(srr_error_payload_t)
+            };
+            srr_error_payload_t err_pl = { .error_status = (uint32_t)SRR_CANCELLED, ._reserved = 0 };
+            srr_ipc_write_all(request->ipc_client_handle, &err_hdr, sizeof(err_hdr), 5000);
+            srr_ipc_write_all(request->ipc_client_handle, &err_pl, sizeof(err_pl), 5000);
+            pthread_mutex_unlock(request->ipc_client_lock);
         }
+    } else {
         pthread_mutex_unlock(&request->lock);
     }
 

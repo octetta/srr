@@ -12,6 +12,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from srr.protocol import (
     srr_crc16,
+    cobs_encode,
+    cobs_decode,
+    encode_wire_frame,
+    decode_wire_frame,
     encode_ipc_request,
     encode_ipc_pulse,
     decode_ipc_header,
@@ -29,6 +33,27 @@ class TestSRRProtocol(unittest.TestCase):
     def test_crc16_standard_vector(self):
         # Standard CCITT-False vector "123456789" -> 0x29B1
         self.assertEqual(srr_crc16(b"123456789"), 0x29B1)
+
+    def test_cobs_vector(self):
+        raw = bytes.fromhex("00010000020304000500")
+        enc = cobs_encode(raw)
+        self.assertEqual(enc.hex(), "0102010104020304020501")
+        dec = cobs_decode(enc)
+        self.assertEqual(dec, raw)
+
+    def test_wire_frame_vector(self):
+        wf = encode_wire_frame(
+            msg_type=SRR_MSG_REQUEST,
+            service_id=42,
+            operation_id=7,
+            session_id=1001,
+            trans_id=999999,
+            payload=b"hello_srr"
+        )
+        self.assertEqual(wf.hex(), "06315252530102020101022a0207010103e90301043f420f01010101020901010c68656c6c6f5f737272ce3e00")
+        hdr, pl = decode_wire_frame(wf)
+        self.assertEqual(hdr["service_id"], 42)
+        self.assertEqual(pl, b"hello_srr")
 
     def test_ipc_framing(self):
         req_frame = encode_ipc_request(trans_id=42, payload=b"HELLO_WORLD")

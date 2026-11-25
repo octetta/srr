@@ -12,6 +12,26 @@ def run_tests
   assert_equal(0x29B1, crc, "CRC16 vector failed")
   puts "  [PASS] CRC-16 CCITT vector"
 
+  # 1b. COBS encoding & decoding
+  raw_mixed = ["00010000020304000500"].pack("H*")
+  enc = SRR::Protocol.cobs_encode(raw_mixed).unpack1("H*")
+  assert_equal("0102010104020304020501", enc)
+  dec = SRR::Protocol.cobs_decode([enc].pack("H*"))
+  assert_equal(raw_mixed, dec)
+  puts "  [PASS] COBS encoding/decoding vector"
+
+  # 1c. Wire frame with COBS
+  wf = SRR::Protocol.encode_wire_frame(
+    msg_type: SRR::Protocol::MSG_REQUEST,
+    service_id: 42,
+    operation_id: 7,
+    session_id: 1001,
+    trans_id: 999999,
+    payload: "hello_srr"
+  ).unpack1("H*")
+  assert_equal("06315252530102020101022a0207010103e90301043f420f01010101020901010c68656c6c6f5f737272ce3e00", wf)
+  puts "  [PASS] Wire frame COBS vector"
+
   # 2. IPC Request framing
   req = SRR::Protocol.encode_ipc_request(100, "HELLO_RUBY")
   assert_equal(24 + 10, req.bytesize)

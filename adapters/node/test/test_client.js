@@ -3,6 +3,10 @@
 const assert = require('assert');
 const {
   srrCrc16,
+  cobsEncode,
+  cobsDecode,
+  encodeWireFrame,
+  decodeWireFrame,
   encodeIpcRequest,
   encodeIpcPulse,
   decodeIpcHeader,
@@ -21,6 +25,29 @@ function runTests() {
   const crc = srrCrc16(Buffer.from('123456789'));
   assert.strictEqual(crc, 0x29B1, `Expected 0x29B1, got 0x${crc.toString(16)}`);
   console.log('  [PASS] CRC-16 CCITT test vector passed');
+
+  // Test 1b: COBS roundtrip
+  const rawMixed = Buffer.from('00010000020304000500', 'hex');
+  const enc = cobsEncode(rawMixed);
+  assert.strictEqual(enc.toString('hex'), '0102010104020304020501');
+  const dec = cobsDecode(enc);
+  assert.deepStrictEqual(dec, rawMixed);
+  console.log('  [PASS] COBS encoding/decoding vector passed');
+
+  // Test 1c: Wire frame roundtrip
+  const wf = encodeWireFrame({
+    msgType: SRR_MSG_REQUEST,
+    serviceId: 42,
+    operationId: 7,
+    sessionId: 1001,
+    transId: 999999,
+    payload: 'hello_srr'
+  });
+  assert.strictEqual(wf.toString('hex'), '06315252530102020101022a0207010103e90301043f420f01010101020901010c68656c6c6f5f737272ce3e00');
+  const parsedWf = decodeWireFrame(wf);
+  assert.strictEqual(parsedWf.header.serviceId, 42);
+  assert.strictEqual(parsedWf.payload.toString(), 'hello_srr');
+  console.log('  [PASS] Wire frame COBS vector passed');
 
   // Test 2: IPC request framing
   const req = encodeIpcRequest(42, 'HELLO_NODE');

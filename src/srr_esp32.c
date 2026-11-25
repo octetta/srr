@@ -43,6 +43,7 @@ static void esp_uart_worker_task(void *pvParameters) {
     while (dev->running) {
         int len = uart_read_bytes(dev->config.uart_port, &ch, 1, 20 / portTICK_PERIOD_MS);
         if (len > 0) {
+            xSemaphoreTake(dev->tx_mutex, portMAX_DELAY);
             xSemaphoreTake(dev->trans_mutex, portMAX_DELAY);
             srr_parser_status_t st = srr_endpoint_feed_byte(&dev->ep, ch);
             if (st == SRR_PARSER_FRAME_READY && dev->waiting_tid > 0) {
@@ -56,6 +57,7 @@ static void esp_uart_worker_task(void *pvParameters) {
                 }
             }
             xSemaphoreGive(dev->trans_mutex);
+            xSemaphoreGive(dev->tx_mutex);
         }
     }
     vTaskDelete(NULL);
@@ -86,9 +88,30 @@ int srr_esp32_create(const srr_esp32_config_t *config, srr_esp32_device_t **out_
     dev->tx_buf = (uint8_t *)malloc(dev->config.tx_buffer_size);
     dev->rep_buf = (uint8_t *)malloc(dev->config.tx_buffer_size);
 
+    if (!dev->rx_buf || !dev->dec_buf || !dev->tx_buf || !dev->rep_buf) {
+        free(dev->rx_buf);
+        free(dev->dec_buf);
+        free(dev->tx_buf);
+        free(dev->rep_buf);
+        free(dev);
+        return -1;
+    }
+
     dev->tx_mutex = xSemaphoreCreateMutex();
     dev->trans_mutex = xSemaphoreCreateMutex();
     dev->reply_sem = xSemaphoreCreateBinary();
+
+    if (!dev->tx_mutex || !dev->trans_mutex || !dev->reply_sem) {
+        if (dev->tx_mutex) vSemaphoreDelete(dev->tx_mutex);
+        if (dev->trans_mutex) vSemaphoreDelete(dev->trans_mutex);
+        if (dev->reply_sem) vSemaphoreDelete(dev->reply_sem);
+        free(dev->rx_buf);
+        free(dev->dec_buf);
+        free(dev->tx_buf);
+        free(dev->rep_buf);
+        free(dev);
+        return -1;
+    }
 
     srr_endpoint_init(
         &dev->ep, (uint32_t)(esp_timer_get_time() / 1000),
@@ -100,7 +123,18 @@ int srr_esp32_create(const srr_esp32_config_t *config, srr_esp32_device_t **out_
     );
 
     dev->running = true;
-    xTaskCreate(esp_uart_worker_task, "srr_uart", dev->config.task_stack_size, dev, dev->config.task_priority, &dev->worker_task);
+    BaseType_t task_rc = xTaskCreate(esp_uart_worker_task, "srr_uart", dev->config.task_stack_size, dev, dev->config.task_priority, &dev->worker_task);
+    if (task_rc != pdPASS) {
+        vSemaphoreDelete(dev->tx_mutex);
+        vSemaphoreDelete(dev->trans_mutex);
+        vSemaphoreDelete(dev->reply_sem);
+        free(dev->rx_buf);
+        free(dev->dec_buf);
+        free(dev->tx_buf);
+        free(dev->rep_buf);
+        free(dev);
+        return -1;
+    }
 
     *out_dev = dev;
     return 0;
@@ -150,6 +184,8 @@ int srr_esp32_request(
     dev->waiting_error = 0;
 
     xSemaphoreGive(dev->trans_mutex);
+    /* Release TX mutex as soon as wire frame transmission is complete */
+    xSemaphoreGive(dev->tx_mutex);
 
     BaseType_t sem_rc = xSemaphoreTake(dev->reply_sem, pdMS_TO_TICKS(timeout_ms));
 
@@ -164,7 +200,6 @@ int srr_esp32_request(
         result = -1; /* Timeout */
     }
     xSemaphoreGive(dev->trans_mutex);
-    xSemaphoreGive(dev->tx_mutex);
 
     return result;
 }
@@ -180,7 +215,10 @@ int srr_esp32_pulse(srr_esp32_device_t *dev, uint16_t service_id, uint16_t opera
 void srr_esp32_destroy(srr_esp32_device_t *dev) {
     if (!dev) return;
     dev->running = false;
-    vTaskDelay(pdMS_TO_TICKS(50));
+    if (dev->worker_task) {
+        vTaskDelete(dev->worker_task);
+        dev->worker_task = NULL;
+    }
     vSemaphoreDelete(dev->tx_mutex);
     vSemaphoreDelete(dev->trans_mutex);
     vSemaphoreDelete(dev->reply_sem);
@@ -244,6 +282,7 @@ static void* host_uart_worker(void *arg) {
             continue;
         }
 
+        pthread_mutex_lock(&dev->tx_mutex);
         pthread_mutex_lock(&dev->trans_mutex);
         srr_parser_status_t st = srr_endpoint_feed_byte(&dev->ep, ch);
         if (st == SRR_PARSER_FRAME_READY && dev->waiting_tid > 0) {
@@ -258,6 +297,7 @@ static void* host_uart_worker(void *arg) {
             }
         }
         pthread_mutex_unlock(&dev->trans_mutex);
+        pthread_mutex_unlock(&dev->tx_mutex);
     }
     return NULL;
 }
@@ -287,9 +327,22 @@ int srr_esp32_create(const srr_esp32_config_t *config, srr_esp32_device_t **out_
     dev->tx_buf = (uint8_t *)malloc(dev->config.tx_buffer_size);
     dev->rep_buf = (uint8_t *)malloc(dev->config.tx_buffer_size);
 
+    if (!dev->rx_buf || !dev->dec_buf || !dev->tx_buf || !dev->rep_buf) {
+        free(dev->rx_buf);
+        free(dev->dec_buf);
+        free(dev->tx_buf);
+        free(dev->rep_buf);
+        free(dev);
+        return -1;
+    }
+
     if (pipe(dev->pipe_fds) != 0) {
-        dev->pipe_fds[0] = -1;
-        dev->pipe_fds[1] = -1;
+        free(dev->rx_buf);
+        free(dev->dec_buf);
+        free(dev->tx_buf);
+        free(dev->rep_buf);
+        free(dev);
+        return -1;
     }
 
     pthread_mutex_init(&dev->tx_mutex, NULL);
@@ -306,7 +359,19 @@ int srr_esp32_create(const srr_esp32_config_t *config, srr_esp32_device_t **out_
     );
 
     dev->running = true;
-    pthread_create(&dev->worker_th, NULL, host_uart_worker, dev);
+    if (pthread_create(&dev->worker_th, NULL, host_uart_worker, dev) != 0) {
+        close(dev->pipe_fds[0]);
+        close(dev->pipe_fds[1]);
+        pthread_mutex_destroy(&dev->tx_mutex);
+        pthread_mutex_destroy(&dev->trans_mutex);
+        pthread_cond_destroy(&dev->reply_cond);
+        free(dev->rx_buf);
+        free(dev->dec_buf);
+        free(dev->tx_buf);
+        free(dev->rep_buf);
+        free(dev);
+        return -1;
+    }
 
     *out_dev = dev;
     return 0;
@@ -359,6 +424,9 @@ int srr_esp32_request(
     dev->waiting_error = 0;
     dev->reply_arrived = false;
 
+    /* Release TX mutex as soon as wire frame transmission is complete */
+    pthread_mutex_unlock(&dev->tx_mutex);
+
     struct timespec deadline;
     clock_gettime(CLOCK_REALTIME, &deadline);
     deadline.tv_sec += timeout_ms / 1000;
@@ -384,7 +452,6 @@ int srr_esp32_request(
 
     dev->waiting_tid = 0;
     pthread_mutex_unlock(&dev->trans_mutex);
-    pthread_mutex_unlock(&dev->tx_mutex);
 
     return result;
 }

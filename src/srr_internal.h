@@ -28,12 +28,12 @@ typedef enum {
     SRR_STATE_DISCONNECTED,
     SRR_STATE_SERVER_DIED,
     SRR_STATE_ERROR
-} srr_trans_state_t;
+} srr_req_state_t;
 
 struct srr_request {
     srr_backend_type_t backend;
     srr_item_type_t    type;
-    srr_trans_state_t  state;
+    srr_req_state_t    state;
     srr_status_t       terminal_status;
 
     /* Synchronization for thread sender */
@@ -125,7 +125,7 @@ struct srr_connection {
 srr_request_t *srr_request_alloc(srr_backend_type_t backend, srr_item_type_t type);
 void           srr_request_retain(srr_request_t *req);
 void           srr_request_release(srr_request_t *req);
-bool           srr_request_complete_terminal(srr_request_t *req, srr_trans_state_t term_state, srr_status_t status);
+bool           srr_request_complete_terminal(srr_request_t *req, srr_req_state_t term_state, srr_status_t status);
 
 void           srr_channel_retain(srr_channel_t *chan);
 void           srr_channel_release(srr_channel_t *chan);

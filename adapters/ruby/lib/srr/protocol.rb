@@ -38,6 +38,94 @@ module SRR
       crc
     end
 
+    def self.cobs_encode(data)
+      bytes = data.is_a?(String) ? data.bytes : data
+      out = [1]
+      code_idx = 0
+      code = 1
+      bytes.each do |b|
+        if b == 0
+          out[code_idx] = code
+          code = 1
+          code_idx = out.length
+          out << 1
+        else
+          out << b
+          code += 1
+          if code == 0xFF
+            out[code_idx] = code
+            code = 1
+            code_idx = out.length
+            out << 1
+          end
+        end
+      end
+      out[code_idx] = code
+      out.pack("C*")
+    end
+
+    def self.cobs_decode(data)
+      bytes = data.is_a?(String) ? data.bytes : data
+      return "".b if bytes.empty?
+      out = []
+      i = 0
+      n = bytes.length
+      while i < n
+        code = bytes[i]
+        i += 1
+        raise "Zero byte inside COBS data" if code == 0
+        (1...code).each do
+          raise "Truncated COBS stream" if i >= n
+          out << bytes[i]
+          i += 1
+        end
+        out << 0 if code < 0xFF && i < n
+      end
+      out.pack("C*")
+    end
+
+    def self.encode_wire_frame(msg_type:, service_id:, operation_id:, session_id:, trans_id:, payload: "", flags: 0)
+      payload_bytes = payload.to_s.b
+      raw = [MAGIC, VERSION, msg_type, flags, service_id, operation_id, 0, session_id, trans_id, payload_bytes.bytesize].pack(WIRE_HEADER_FMT) + payload_bytes
+      crc = crc16(raw)
+      unencoded = raw + [crc].pack("v")
+      cobs_encode(unencoded) + "\x00".b
+    end
+
+    def self.decode_wire_frame(frame)
+      bytes = frame.to_s.b
+      raise "Wire frame must end with 0x00 delimiter" if bytes.empty? || bytes[-1] != "\x00".b
+      unencoded = cobs_decode(bytes[0...-1])
+      raise "Decoded wire frame too short" if unencoded.bytesize < WIRE_HEADER_SIZE + CRC_SIZE
+
+      body = unencoded[0...-CRC_SIZE]
+      expected_crc = unencoded[-CRC_SIZE, CRC_SIZE].unpack1("v")
+      calc_crc = crc16(body)
+      raise "CRC-16 mismatch" unless expected_crc == calc_crc
+
+      magic, ver, msg_type, flags, s_id, op_id, res, sess_id, tid, plen = body[0, WIRE_HEADER_SIZE].unpack(WIRE_HEADER_FMT)
+      raise "Invalid magic" unless magic == MAGIC
+      raise "Invalid version" unless ver == VERSION
+
+      payload = body[WIRE_HEADER_SIZE, plen]
+      raise "Payload length mismatch" if payload.bytesize != plen
+
+      [
+        {
+          magic: magic,
+          version: ver,
+          msg_type: msg_type,
+          flags: flags,
+          service_id: s_id,
+          operation_id: op_id,
+          session_id: sess_id,
+          trans_id: tid,
+          payload_len: plen
+        },
+        payload
+      ]
+    end
+
     def self.encode_ipc_request(trans_id, payload)
       payload_bytes = payload.to_s.b
       hdr = [MAGIC, VERSION, MSG_REQUEST, 0, trans_id, payload_bytes.bytesize].pack(IPC_HEADER_FMT)

@@ -18,6 +18,17 @@ echo "Running PHP SRR Adapter unit tests...\n";
 $crc = Protocol::crc16("123456789");
 assert_test($crc === 0x29B1, "CRC-16 CCITT vector matches 0x29B1");
 
+// 1b. COBS encoding & decoding
+$raw = hex2bin("00010000020304000500");
+$enc = bin2hex(Protocol::cobsEncode($raw));
+assert_test($enc === "0102010104020304020501", "COBS encode vector matches");
+$dec = Protocol::cobsDecode(hex2bin($enc));
+assert_test($dec === $raw, "COBS decode roundtrip matches");
+
+// 1c. Wire frame with COBS
+$wf = bin2hex(Protocol::encodeWireFrame(Protocol::MSG_REQUEST, 42, 7, 1001, 999999, "hello_srr"));
+assert_test($wf === "06315252530102020101022a0207010103e90301043f420f01010101020901010c68656c6c6f5f737272ce3e00", "Wire frame vector matches");
+
 // 2. IPC Request framing
 $req = Protocol::encodeIpcRequest(99, "PHP_DATA");
 assert_test(strlen($req) === 24 + 8, "IPC request frame length is 32 bytes");

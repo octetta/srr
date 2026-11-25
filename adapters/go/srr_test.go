@@ -17,6 +17,34 @@ func TestCRC16(t *testing.T) {
 	}
 }
 
+func TestCOBS(t *testing.T) {
+	raw := []byte{0x00, 0x01, 0x00, 0x00, 0x02, 0x03, 0x04, 0x00, 0x05, 0x00}
+	enc := COBSEncode(raw)
+	expectedHex := "0102010104020304020501"
+	if fmt.Sprintf("%x", enc) != expectedHex {
+		t.Fatalf("COBS encode mismatch: expected %s, got %x", expectedHex, enc)
+	}
+	dec, err := COBSDecode(enc)
+	if err != nil || !bytes.Equal(dec, raw) {
+		t.Fatalf("COBS decode roundtrip failed: %v", err)
+	}
+}
+
+func TestWireFrameVector(t *testing.T) {
+	wf := EncodeWireFrame(MsgRequest, 42, 7, 1001, 999999, []byte("hello_srr"), 0)
+	expectedHex := "06315252530102020101022a0207010103e90301043f420f01010101020901010c68656c6c6f5f737272ce3e00"
+	if fmt.Sprintf("%x", wf) != expectedHex {
+		t.Fatalf("Wire frame vector mismatch: expected %s, got %x", expectedHex, wf)
+	}
+	hdr, pl, err := DecodeWireFrame(wf)
+	if err != nil {
+		t.Fatalf("DecodeWireFrame error: %v", err)
+	}
+	if hdr.ServiceID != 42 || string(pl) != "hello_srr" {
+		t.Fatalf("Parsed wire frame contents invalid: %+v, pl=%s", hdr, string(pl))
+	}
+}
+
 func TestIPCFraming(t *testing.T) {
 	req := EncodeIPCRequest(42, []byte("HELLO_GO"))
 	if len(req) != IPCHeaderSize+8 {

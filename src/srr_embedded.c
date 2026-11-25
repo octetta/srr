@@ -129,12 +129,24 @@ srr_parser_status_t srr_endpoint_feed_byte(srr_endpoint_t *ep, uint8_t byte) {
         }
 
         if (handler && handler_rc == 0) {
-            reply_hdr.msg_type = SRR_WIRE_REPLY;
-            reply_hdr.payload_len = (uint32_t)reply_len;
-            size_t enc = srr_wire_encode_frame(&reply_hdr, ep->server_reply_buf, reply_len, ep->tx_buf, ep->tx_cap);
-            if (enc > 0 && ep->tx_fn) {
-                ep->tx_fn(ep->tx_buf, enc, ep->tx_user_data);
-                ep->tx_frames++;
+            if (reply_len > ep->server_reply_cap) {
+                /* Reply length exceeds allocated server reply buffer: reject with error */
+                reply_hdr.msg_type = SRR_WIRE_ERROR;
+                reply_hdr.flags = 7; /* SRR_TOO_LARGE */
+                reply_hdr.payload_len = 0;
+                size_t enc = srr_wire_encode_frame(&reply_hdr, NULL, 0, ep->tx_buf, ep->tx_cap);
+                if (enc > 0 && ep->tx_fn) {
+                    ep->tx_fn(ep->tx_buf, enc, ep->tx_user_data);
+                    ep->tx_frames++;
+                }
+            } else {
+                reply_hdr.msg_type = SRR_WIRE_REPLY;
+                reply_hdr.payload_len = (uint32_t)reply_len;
+                size_t enc = srr_wire_encode_frame(&reply_hdr, ep->server_reply_buf, reply_len, ep->tx_buf, ep->tx_cap);
+                if (enc > 0 && ep->tx_fn) {
+                    ep->tx_fn(ep->tx_buf, enc, ep->tx_user_data);
+                    ep->tx_frames++;
+                }
             }
         } else {
             /* Service error */
@@ -187,7 +199,9 @@ void srr_endpoint_tick(srr_endpoint_t *ep, uint32_t now_ms) {
     for (size_t i = 0; i < SRR_EMBEDDED_MAX_TRANSACTIONS; i++) {
         srr_async_trans_t *t = &ep->transactions[i];
         if (t->state == SRR_TRANS_PENDING) {
-            if (now_ms >= t->timeout_at_ms) {
+            /* Signed difference handles 32-bit modular timer wraparound correctly */
+            int32_t diff = (int32_t)(now_ms - t->timeout_at_ms);
+            if (diff >= 0) {
                 t->state = SRR_TRANS_TIMED_OUT;
             }
         }
