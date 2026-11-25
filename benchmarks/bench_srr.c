@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE 1
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -6,7 +7,11 @@
 #include <pthread.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/socket.h>
 #include "srr/srr.h"
+#include "srr_wire.h"
+#include "srr_serial.h"
+#include "srr_embedded.h"
 
 #define BENCH_WARMUP_ITERS 1000
 #define BENCH_ITERS 50000
@@ -105,7 +110,6 @@ static void run_bench_pthread_1to1(void) {
         srr_send(conn, payload, sizeof(payload), reply, sizeof(reply), &reply_sz);
     }
 
-    /* Timed Runs */
     uint64_t *latencies = (uint64_t *)malloc(sizeof(uint64_t) * BENCH_ITERS);
     assert(latencies != NULL);
 
@@ -122,7 +126,6 @@ static void run_bench_pthread_1to1(void) {
     compute_stats(latencies, BENCH_ITERS, t_end - t_start, &stats);
     print_stats("Pthread In-Process (1 Client -> 1 Server, 64-byte payload)", &stats, BENCH_ITERS);
 
-    /* Clean exit */
     srr_pulse(conn, 1, 0);
     pthread_join(srv_th, NULL);
     srr_disconnect(conn);
@@ -211,7 +214,6 @@ static void run_bench_pthread_m2m(void) {
     compute_stats(all_lats, total_count, t_end - t_start, &stats);
     print_stats("Pthread In-Process Multi-Threaded (4 Clients -> 4 Servers, 64-byte payload)", &stats, total_count);
 
-    /* Wake servers and close */
     assert(srr_channel_close(chan) == SRR_OK);
     for (int i = 0; i < M2M_SERVERS; i++) {
         pthread_join(servers[i], NULL);
@@ -280,6 +282,218 @@ static void run_bench_ipc_1to1(void) {
     free(latencies);
 }
 
+/*
+ * ----------------------------------------------------------------------------
+ * 4. Queue-Full & Backpressure Benchmark (§15 requirement)
+ * ----------------------------------------------------------------------------
+ */
+
+static void run_bench_queue_full(void) {
+    srr_channel_options_t opts = {
+        .queue_capacity = 32, /* Small queue to trigger full state */
+        .max_request_size = 256,
+        .max_reply_size = 256
+    };
+    srr_channel_t *chan = NULL;
+    assert(srr_channel_create(&opts, &chan) == SRR_OK);
+
+    srr_connection_t *conn = NULL;
+    assert(srr_connect_channel(chan, NULL, &conn) == SRR_OK);
+
+    /* Fill queue with pulses without reading */
+    size_t filled = 0;
+    while (srr_pulse(conn, 1, 42) == SRR_OK) {
+        filled++;
+    }
+    assert(filled == 32);
+
+    /* Queue is now full: measure rejection latency */
+    size_t iters = 50000;
+    uint64_t *latencies = (uint64_t *)malloc(sizeof(uint64_t) * iters);
+
+    uint64_t t_start = get_time_ns();
+    for (size_t i = 0; i < iters; i++) {
+        uint64_t s = get_time_ns();
+        srr_status_t st = srr_pulse(conn, 1, 42);
+        uint64_t e = get_time_ns();
+        assert(st == SRR_QUEUE_FULL);
+        latencies[i] = e - s;
+    }
+    uint64_t t_end = get_time_ns();
+
+    bench_stats_t stats;
+    compute_stats(latencies, iters, t_end - t_start, &stats);
+    print_stats("Queue-Full / Backpressure Rejection (Capacity 32, SRR_QUEUE_FULL)", &stats, iters);
+
+    /* Drain queue & destroy */
+    srr_disconnect(conn);
+    srr_channel_close(chan);
+    srr_channel_destroy(chan);
+    free(latencies);
+}
+
+/*
+ * ----------------------------------------------------------------------------
+ * 5. Wire Framing (COBS + CRC-16) Encoding & Decoding Benchmark
+ * ----------------------------------------------------------------------------
+ */
+
+static void run_bench_wire_framing(void) {
+    srr_wire_header_t hdr = {
+        .magic = SRR_WIRE_MAGIC,
+        .version = SRR_WIRE_VERSION,
+        .msg_type = SRR_WIRE_REQUEST,
+        .session_id = 0x1234,
+        .trans_id = 999,
+        .service_id = 1,
+        .operation_id = 2,
+        .payload_len = 64
+    };
+
+    uint8_t payload[64];
+    memset(payload, 0x5A, sizeof(payload));
+
+    uint8_t encoded[256];
+    size_t iters = 100000;
+
+    /* Benchmark full frame encoding */
+    uint64_t *enc_lats = (uint64_t *)malloc(sizeof(uint64_t) * iters);
+    uint64_t t0 = get_time_ns();
+    for (size_t i = 0; i < iters; i++) {
+        uint64_t s = get_time_ns();
+        size_t len = srr_wire_encode_frame(&hdr, payload, sizeof(payload), encoded, sizeof(encoded));
+        uint64_t e = get_time_ns();
+        (void)len;
+        enc_lats[i] = e - s;
+    }
+    uint64_t t1 = get_time_ns();
+
+    bench_stats_t enc_stats;
+    compute_stats(enc_lats, iters, t1 - t0, &enc_stats);
+    print_stats("Wire Framing: Encode Frame (32B Hdr + 64B Payload + CRC16 + COBS)", &enc_stats, iters);
+
+    /* Benchmark streaming chunk parser decode */
+    uint8_t rx_buf[256];
+    uint8_t dec_buf[256];
+    srr_wire_parser_t parser;
+    srr_wire_parser_init(&parser, rx_buf, sizeof(rx_buf), dec_buf, sizeof(dec_buf));
+
+    size_t frame_len = srr_wire_encode_frame(&hdr, payload, sizeof(payload), encoded, sizeof(encoded));
+    uint64_t *dec_lats = (uint64_t *)malloc(sizeof(uint64_t) * iters);
+
+    t0 = get_time_ns();
+    for (size_t i = 0; i < iters; i++) {
+        srr_wire_header_t out_hdr;
+        const uint8_t *out_p = NULL;
+        uint64_t s = get_time_ns();
+        for (size_t b = 0; b < frame_len; b++) {
+            srr_wire_parser_feed_byte(&parser, encoded[b], &out_hdr, &out_p);
+        }
+        uint64_t e = get_time_ns();
+        dec_lats[i] = e - s;
+    }
+    t1 = get_time_ns();
+
+    bench_stats_t dec_stats;
+    compute_stats(dec_lats, iters, t1 - t0, &dec_stats);
+    print_stats("Wire Framing: Decode 1-Byte Chunk Feed (64B Payload + Header + CRC)", &dec_stats, iters);
+
+    free(enc_lats);
+    free(dec_lats);
+}
+
+/*
+ * ----------------------------------------------------------------------------
+ * 6. Serial Transport Loopback Benchmark
+ * ----------------------------------------------------------------------------
+ */
+
+static int serial_bench_tx(const uint8_t *data, size_t len, void *user_data) {
+    int fd = *(int *)user_data;
+    ssize_t n = write(fd, data, len);
+    return n == (ssize_t)len ? 0 : -1;
+}
+
+static int serial_bench_handler(
+    uint16_t svc, uint16_t op,
+    const uint8_t *req, size_t req_len,
+    uint8_t *reply, size_t cap, size_t *out_len,
+    void *user_data)
+{
+    (void)svc; (void)op; (void)user_data;
+    if (cap < req_len) return -1;
+    memcpy(reply, req, req_len);
+    *out_len = req_len;
+    return 0;
+}
+
+typedef struct {
+    int srv_fd;
+    volatile bool running;
+    srr_endpoint_t ep;
+    uint8_t rx[512], dec[512], tx[512], rep[512];
+} serial_bench_srv_t;
+
+static void* serial_srv_worker(void *arg) {
+    serial_bench_srv_t *ctx = (serial_bench_srv_t *)arg;
+    uint8_t ch;
+    while (ctx->running) {
+        ssize_t n = read(ctx->srv_fd, &ch, 1);
+        if (n <= 0) break;
+        srr_endpoint_feed_byte(&ctx->ep, ch);
+    }
+    return NULL;
+}
+
+static void run_bench_serial_loopback(void) {
+    int fds[2];
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+
+    serial_bench_srv_t srv;
+    memset(&srv, 0, sizeof(srv));
+    srv.srv_fd = fds[1];
+    srv.running = true;
+
+    assert(srr_endpoint_init(&srv.ep, 0x5555, serial_bench_tx, &srv.srv_fd,
+                             srv.rx, sizeof(srv.rx), srv.dec, sizeof(srv.dec),
+                             srv.tx, sizeof(srv.tx), srv.rep, sizeof(srv.rep)) == 0);
+    srr_endpoint_register_service(&srv.ep, 1, serial_bench_handler, NULL);
+
+    pthread_t th;
+    pthread_create(&th, NULL, serial_srv_worker, &srv);
+
+    srr_serial_port_t *client = srr_serial_from_fd(fds[0], true, NULL);
+    assert(client != NULL);
+
+    char payload[32] = "serial_bench_32_bytes_payload!!";
+    char reply[64];
+    size_t reply_len = 0;
+
+    size_t iters = 5000;
+    uint64_t *latencies = (uint64_t *)malloc(sizeof(uint64_t) * iters);
+
+    uint64_t t0 = get_time_ns();
+    for (size_t i = 0; i < iters; i++) {
+        uint64_t s = get_time_ns();
+        int rc = srr_serial_request(client, 1, 1, payload, sizeof(payload), reply, sizeof(reply), &reply_len, 1000);
+        uint64_t e = get_time_ns();
+        assert(rc == 0);
+        latencies[i] = e - s;
+    }
+    uint64_t t1 = get_time_ns();
+
+    bench_stats_t stats;
+    compute_stats(latencies, iters, t1 - t0, &stats);
+    print_stats("Serial Wire Full-Duplex Loopback (32-byte payload, End-to-End)", &stats, iters);
+
+    srv.running = false;
+    shutdown(fds[1], SHUT_RDWR);
+    pthread_join(th, NULL);
+    close(fds[1]);
+    srr_serial_close(client);
+    free(latencies);
+}
+
 int main(void) {
     printf("\n######################################################################\n");
     printf("                  SRR PERFORMANCE BENCHMARK SUITE                     \n");
@@ -288,6 +502,9 @@ int main(void) {
     run_bench_pthread_1to1();
     run_bench_pthread_m2m();
     run_bench_ipc_1to1();
+    run_bench_queue_full();
+    run_bench_wire_framing();
+    run_bench_serial_loopback();
 
     printf("Benchmark suite completed successfully.\n");
     return 0;
