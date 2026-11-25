@@ -83,6 +83,9 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[cmd_idx], "help") == 0 || strcmp(argv[cmd_idx], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
+        } else if (strcmp(argv[cmd_idx], "--version") == 0 || strcmp(argv[cmd_idx], "-v") == 0) {
+            printf("srr version %s (protocol v%u)\n", srr_version(), (unsigned int)srr_protocol_version());
+            return 0;
         } else {
             break; /* Subcommand starts */
         }

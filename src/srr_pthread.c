@@ -891,3 +891,15 @@ const char *srr_status_str(srr_status_t status) {
         default:                 return "SRR_UNKNOWN";
     }
 }
+
+const char* srr_version(void) {
+    return SRR_VERSION_STRING;
+}
+
+uint32_t srr_version_number(void) {
+    return SRR_VERSION_HEX;
+}
+
+uint16_t srr_protocol_version(void) {
+    return SRR_PROTOCOL_VERSION;
+}

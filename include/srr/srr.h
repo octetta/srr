@@ -19,6 +19,21 @@ extern "C" {
  *   4. Server: srr_request_dispose() releases server-side request handle.
  */
 
+/* Project Version */
+#define SRR_VERSION_MAJOR    0
+#define SRR_VERSION_MINOR    1
+#define SRR_VERSION_PATCH    0
+#define SRR_VERSION_STRING   "0.1.0"
+#define SRR_VERSION_HEX      ((SRR_VERSION_MAJOR << 16) | (SRR_VERSION_MINOR << 8) | (SRR_VERSION_PATCH))
+
+/* Wire & Framing Protocol Version */
+#define SRR_PROTOCOL_VERSION 1
+
+/* Runtime Version Queries */
+const char* srr_version(void);
+uint32_t    srr_version_number(void);
+uint16_t    srr_protocol_version(void);
+
 /* Opaque Handles */
 typedef struct srr_channel    srr_channel_t;
 typedef struct srr_connection srr_connection_t;
