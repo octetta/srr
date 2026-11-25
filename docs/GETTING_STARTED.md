@@ -4,6 +4,30 @@ This guide walks you through building concurrent, message-driven C applications 
 
 ---
 
+## What SRR Is Good For & How to Use It
+
+### What SRR Is Good For
+* **Uniform Multi-Tier Architecture:** One communication contract spans in-process threads, local OS processes, network UDP sockets, and bare-metal microcontrollers (Pico, AVR, ESP32, Propeller P1).
+* **Deterministic Single-Winner RPC:** Transactions never complete twice. Concurrent timeouts, late server replies, and client disconnects are arbitrated safely without stale replies or lost wakeups.
+* **Zero-Heap Microcontroller Profiles:** Runs without dynamic heap memory (`malloc`), preventing fragmentation on 8-bit and 32-bit embedded targets.
+* **Polyglot Interoperability:** C services can be driven natively from Go, Python, Perl, Node.js, Ruby, PHP, Erlang, Elixir, Gleam, Tcl, and Shell.
+
+### The Core Interaction Model
+```text
+       Synchronous Transaction (Control / RPC)
+Client ────────────────── srr_send() ──────────────────► Server (blocks client)
+Client ◄───────────────── srr_reply() ───────────────── Server (unblocks client)
+
+       Asynchronous Notification (Telemetry / Ticks / Alarms)
+Client ────────────────── srr_pulse() ─────────────────► Server (non-blocking)
+```
+
+1. **Server**: Calls `srr_channel_create()`, waits in a loop with `srr_receive()`, processes the request, and unblocks the client with `srr_reply()`.
+2. **Client**: Calls `srr_connect()`, issues a synchronous request with `srr_send()` or `srr_send_timed()`, and blocks safely until the server responds.
+3. **Pulses**: For one-way notifications (sensor telemetry, periodic ticks, emergency stops), either endpoint calls `srr_pulse()` without blocking or waiting for an answer.
+
+---
+
 ## 1. Quick Tutorial: In-Process Thread Messaging
 
 In SRR, threads communicate through **channels** and **connections** without sockets or network overhead.

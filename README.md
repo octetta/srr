@@ -4,6 +4,34 @@ SRR provides a synchronous **Send / Receive / Reply** service communication mode
 
 ---
 
+## What SRR Is Good For
+
+* **Unifying Host & Microcontroller Control Planes:** Instead of using mutexes for threads, Unix domain sockets for IPC, HTTP/REST for daemons, and ad-hoc serial protocols for microcontrollers, SRR provides **one uniform communication model** across all tiers: in-process C threads, host IPC (Linux/macOS/Windows), network UDP, and bare-metal MCUs (RP2040 Pico, AVR ATmega328P, ESP32, Parallax Propeller P1).
+* **Predictable, Single-Winner Transactions:** Unlike publish-subscribe or raw streaming sockets where message boundaries, ordering, and delivery guarantees are ambiguous, SRR enforces a strict synchronous contract: a transaction is answered exactly once with `srr_reply()`, or deterministically resolves to a terminal failure (`SRR_TIMEOUT`, `SRR_DISCONNECTED`, `SRR_CANCELLED`). Race conditions between late replies, timeouts, and disconnects are arbitrated with 100% precision.
+* **Zero-Heap, Memory-Constrained Hardware:** Embedded profiles operate entirely on statically provided buffers without dynamic memory allocation (`malloc`), fitting inside as little as 335 bytes of RAM on an 8-bit Arduino ATmega328P.
+* **Polyglot Glue:** Native language adapters (Go, Python, Perl, Node.js, Ruby, PHP, BEAM/Erlang/Elixir/Gleam, Tcl, and Shell) can orchestrate, test, and control hardware devices and background C daemons identically.
+
+---
+
+## How to Use It (The Core Mental Model)
+
+SRR provides two foundational interaction primitives:
+
+```text
+       Synchronous Transaction (Control / RPC)
+Client ────────────────── srr_send() ──────────────────► Server (blocks client)
+Client ◄───────────────── srr_reply() ───────────────── Server (unblocks client)
+
+       Asynchronous Notification (Telemetry / Ticks / Alarms)
+Client ────────────────── srr_pulse() ─────────────────► Server (non-blocking)
+```
+
+1. **The Server Listens and Replies**: Creates a channel (in-process or named IPC/wire service) and loops on `srr_receive(chan, &req)`. When a request arrives, it inspects the payload and calls `srr_reply(req, reply_data, len)` to return the response and unblock the client.
+2. **The Client Connects and Sends**: Connects to the service and calls `srr_send()` (or `srr_send_timed()`). The client blocks until the reply arrives or a timeout occurs.
+3. **One-Way Pulses**: When fire-and-forget telemetry, heartbeats, or interrupts are needed without waiting for a reply, either party emits an `srr_pulse(conn, code, value)`.
+
+---
+
 ## Key Highlights
 
 - **Predictable Control-Plane Transactions:** A client initiates a transaction with `srr_send()` (or `srr_send_timed()`) and blocks until the server answers with `srr_reply()` or a terminal state occurs (timeout, disconnect, channel closure).
