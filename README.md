@@ -64,6 +64,19 @@ SRR shares that same clean philosophy, but breaks through the walls that Go chan
 
 ---
 
+## The 4 Physical Tiers: Run It Anywhere
+
+The exact same Send / Receive / Reply code and error contracts operate across four distinct environments:
+
+| Tier | Environment | Underlying Transport | Typical Latency | Key Benefit |
+| :--- | :--- | :--- | :---: | :--- |
+| **Tier 1: In-Process** | Same application | Direct pointer swap & mutex condition | **6.7 µs** | Zero-copy, replaces lock orchestration |
+| **Tier 2: Local IPC** | Separate OS processes | Unix Domain Sockets (Linux/macOS) & Named Pipes (Win32) | **17 µs** | Built-in framing, no stale replies on timeout |
+| **Tier 3: Network** | Different physical machines | UDP Datagrams or TCP streams (LAN / Wi-Fi / WAN) | **Sub-millisecond** | No HTTP/gRPC overhead, runs on Wi-Fi MCUs |
+| **Tier 4: Microcontrollers**| Bare-metal embedded | Serial UART, USB CDC, SPI | Platform clock | Zero heap (`malloc`), fits in 335B RAM |
+
+---
+
 ## What SRR Is Good For
 
 * **Unifying Host & Microcontroller Control Planes:** Instead of using mutexes for threads, Unix domain sockets for IPC, HTTP/REST for daemons, and ad-hoc serial protocols for microcontrollers, SRR provides **one uniform communication model** across all tiers: in-process C threads, host IPC (Linux/macOS/Windows), network UDP, and bare-metal MCUs (RP2040 Pico, AVR ATmega328P, ESP32, Parallax Propeller P1).
@@ -259,7 +272,52 @@ int main(void) {
 }
 ```
 
-### 3. BEAM Ecosystem (Erlang, Elixir, Gleam)
+### 3. Cross-Machine Network RPC (UDP / Wi-Fi / LAN)
+
+Synchronous Request/Reply between two separate physical machines (e.g., laptop controlling a remote robot or Wi-Fi ESP32 pod) without HTTP, TLS, or connection handshakes:
+
+```c
+#include "srr_udp.h"
+
+/* Machine B (Server / Robot listening on LAN port 8888) */
+void run_network_server(void) {
+    srr_udp_endpoint_t *srv = srr_udp_server_create(8888, NULL);
+    srr_udp_peer_t *peer = NULL;
+    srr_wire_header_t hdr;
+    char req[256];
+    size_t req_len = 0;
+
+    while (srr_udp_server_receive(srv, &hdr, req, sizeof(req), &req_len, &peer, -1) == 0) {
+        /* Process request and reply directly to the remote client */
+        const char *reply = "PONG_FROM_MACHINE_B";
+        srr_udp_server_reply(srv, peer, hdr.trans_id, hdr.service_id, hdr.operation_id,
+                             reply, strlen(reply) + 1, false);
+        srr_udp_peer_free(peer);
+    }
+    srr_udp_close(srv);
+}
+
+/* Machine A (Client on Laptop / Controller) */
+void run_network_client(void) {
+    srr_udp_endpoint_t *cli = srr_udp_client_create("192.168.1.50", 8888, NULL);
+
+    char reply[64];
+    size_t reply_len = 0;
+    /* Synchronous network request: blocks until Machine B replies or 200ms timeout fires */
+    int rc = srr_udp_request(cli, 10 /* service */, 1 /* op */,
+                             "PING", 5, reply, sizeof(reply), &reply_len, 200 /* ms timeout */);
+    if (rc == 0) {
+        printf("Machine B answered: %s\n", reply);
+    }
+
+    /* Fire-and-forget one-way network telemetry pulse */
+    srr_udp_pulse(cli, 10, 5, "HEARTBEAT", 10);
+
+    srr_udp_close(cli);
+}
+```
+
+### 4. BEAM Ecosystem (Erlang, Elixir, Gleam)
 
 ```erlang
 %% Erlang: Synchronous GenServer call & async pulse
