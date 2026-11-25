@@ -77,13 +77,29 @@ SRR shares that same clean philosophy, but breaks through the walls that Go chan
 
 SRR provides two foundational interaction primitives:
 
-```text
-       Synchronous Transaction (Control / RPC)
-Client ────────────────── srr_send() ──────────────────► Server (blocks client)
-Client ◄───────────────── srr_reply() ───────────────── Server (unblocks client)
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client
+    participant SRR as SRR Channel / Wire
+    actor Server
 
-       Asynchronous Notification (Telemetry / Ticks / Alarms)
-Client ────────────────── srr_pulse() ─────────────────► Server (non-blocking)
+    Note over Client,Server: Mode 1: Synchronous Request-Reply (Control / RPC)
+    Client->>SRR: srr_send(conn, request_data)
+    activate Client
+    Note over Client: Client blocks safely
+    SRR->>Server: srr_receive(chan, &req)
+    activate Server
+    Note over Server: Server processes request
+    Server->>SRR: srr_reply(req, reply_data)
+    deactivate Server
+    SRR-->>Client: Reply delivered (unblocks client)
+    deactivate Client
+
+    Note over Client,Server: Mode 2: Asynchronous Pulse (Telemetry / Ticks / Alarms)
+    Client-)SRR: srr_pulse(conn, code, value)
+    Note over Client: Fire-and-forget (non-blocking)
+    SRR-)Server: Delivered to srr_receive queue
 ```
 
 1. **The Server Listens and Replies**: Creates a channel (in-process or named IPC/wire service) and loops on `srr_receive(chan, &req)`. When a request arrives, it inspects the payload and calls `srr_reply(req, reply_data, len)` to return the response and unblock the client.

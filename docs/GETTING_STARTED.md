@@ -14,13 +14,30 @@ This guide walks you through building concurrent, message-driven C applications 
 * **Polyglot Interoperability:** C services can be driven natively from Go, Python, Perl, Node.js, Ruby, PHP, Erlang, Elixir, Gleam, Tcl, and Shell.
 
 ### The Core Interaction Model
-```text
-       Synchronous Transaction (Control / RPC)
-Client ────────────────── srr_send() ──────────────────► Server (blocks client)
-Client ◄───────────────── srr_reply() ───────────────── Server (unblocks client)
 
-       Asynchronous Notification (Telemetry / Ticks / Alarms)
-Client ────────────────── srr_pulse() ─────────────────► Server (non-blocking)
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client
+    participant SRR as SRR Channel / Wire
+    actor Server
+
+    Note over Client,Server: Mode 1: Synchronous Request-Reply (Control / RPC)
+    Client->>SRR: srr_send(conn, request_data)
+    activate Client
+    Note over Client: Client blocks safely
+    SRR->>Server: srr_receive(chan, &req)
+    activate Server
+    Note over Server: Server processes request
+    Server->>SRR: srr_reply(req, reply_data)
+    deactivate Server
+    SRR-->>Client: Reply delivered (unblocks client)
+    deactivate Client
+
+    Note over Client,Server: Mode 2: Asynchronous Pulse (Telemetry / Ticks / Alarms)
+    Client-)SRR: srr_pulse(conn, code, value)
+    Note over Client: Fire-and-forget (non-blocking)
+    SRR-)Server: Delivered to srr_receive queue
 ```
 
 1. **Server**: Calls `srr_channel_create()`, waits in a loop with `srr_receive()`, processes the request, and unblocks the client with `srr_reply()`.
