@@ -9,11 +9,11 @@ AR      ?= ar
 WIN_CC  ?= x86_64-w64-mingw32-gcc
 WIN_AR  ?= x86_64-w64-mingw32-ar
 
-SRC     := src/srr_pthread.c src/srr_ipc.c src/srr_wire.c src/srr_serial.c src/srr_embedded.c src/srr_tiny.c src/srr_esp32.c
+SRC     := src/srr_pthread.c src/srr_ipc.c src/srr_wire.c src/srr_serial.c src/srr_embedded.c src/srr_tiny.c src/srr_esp32.c src/srr_p1.c
 OBJ     := $(SRC:.c=.o)
 LIB     := libsrr.a
 
-TEST_SRCS := tests/test_srr_basic.c tests/test_srr_races.c tests/test_srr_stress.c tests/test_srr_ipc.c tests/test_srr_wire.c tests/test_srr_embedded.c tests/test_srr_serial.c tests/test_srr_tiny.c tests/test_srr_esp32.c
+TEST_SRCS := tests/test_srr_basic.c tests/test_srr_races.c tests/test_srr_stress.c tests/test_srr_ipc.c tests/test_srr_wire.c tests/test_srr_embedded.c tests/test_srr_serial.c tests/test_srr_tiny.c tests/test_srr_esp32.c tests/test_srr_p1.c
 TEST_BINS := $(TEST_SRCS:.c=)
 
 # Default target displays help
@@ -114,6 +114,7 @@ test: $(LIB) $(TEST_BINS)
 	./tests/test_srr_serial
 	./tests/test_srr_tiny
 	./tests/test_srr_esp32
+	./tests/test_srr_p1
 	@echo "All native tests passed!"
 
 test-valgrind: $(LIB) $(TEST_BINS)
@@ -127,6 +128,7 @@ test-valgrind: $(LIB) $(TEST_BINS)
 	valgrind --leak-check=full --error-exitcode=1 ./tests/test_srr_serial
 	valgrind --leak-check=full --error-exitcode=1 ./tests/test_srr_tiny
 	valgrind --leak-check=full --error-exitcode=1 ./tests/test_srr_esp32
+	valgrind --leak-check=full --error-exitcode=1 ./tests/test_srr_p1
 	@echo "All Valgrind checks passed with 0 errors and 0 leaks!"
 
 test-adapters: examples beam
@@ -157,7 +159,7 @@ benchmarks/%: benchmarks/%.c $(LIB)
 # ------------------------------------------------------------------------------
 
 clean:
-	rm -f src/*.o src/*.win.o tests/test_srr_basic tests/test_srr_races tests/test_srr_stress tests/test_srr_ipc tests/test_srr_wire tests/test_srr_embedded tests/test_srr_serial tests/test_srr_tiny tests/test_srr_esp32 tests/*.exe
+	rm -f src/*.o src/*.win.o tests/test_srr_basic tests/test_srr_races tests/test_srr_stress tests/test_srr_ipc tests/test_srr_wire tests/test_srr_embedded tests/test_srr_serial tests/test_srr_tiny tests/test_srr_esp32 tests/test_srr_p1 tests/*.exe
 	rm -f benchmarks/bench_srr benchmarks/*.exe
 	rm -f examples/synth_engine/synth_server examples/synth_engine/synth_cli
 	rm -f examples/pico/pico_device_sim examples/pico/pico_host_cli

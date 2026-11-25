@@ -24,6 +24,7 @@ tests/test_srr_serial
 tests/test_srr_embedded
 tests/test_srr_tiny
 tests/test_srr_esp32
+tests/test_srr_p1
 tests/*.exe
 
 # Benchmark executables
