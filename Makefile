@@ -18,7 +18,7 @@ TEST_BINS := $(TEST_SRCS:.c=)
 
 # Default target displays help
 .DEFAULT_GOAL := help
-.PHONY: help all lib examples tools beam win32 test test-valgrind test-adapters test-all bench clean
+.PHONY: help all lib examples tools beam win32 test test-valgrind test-adapters test-scripts test-all bench clean
 
 # ------------------------------------------------------------------------------
 # Help Target
@@ -140,7 +140,13 @@ test-adapters: examples beam
 	python3 gateway/test_gateway.py
 	@echo "All adapter integration tests passed!"
 
-test-all: test-valgrind test-adapters
+test-scripts: tools examples
+	@echo "--- Running Scripting & Automation Tests (Shell, Python, Perl, Tcl) ---"
+	./examples/scripting/shell_automation.sh
+	tclsh examples/scripting/srr_client.tcl
+	@echo "Scripting tests passed!"
+
+test-all: test-valgrind test-adapters test-scripts
 	@echo "================================================================================"
 	@echo " ALL VERIFICATION SUITES (NATIVE, VALGRIND, ADAPTERS) PASSED WITH ZERO ERRORS!"
 	@echo "================================================================================"

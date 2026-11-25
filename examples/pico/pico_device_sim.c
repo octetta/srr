@@ -64,11 +64,13 @@ static int gpio_handler(
         *out_len = 2;
         return 0;
     } else if (op == OP_WRITE) {
-        if (req_len < 2) return -1;
-        uint8_t pin = req[0];
-        uint8_t val = req[1];
-        if (pin >= 32) return -1;
-        g_gpio_pins[pin] = val;
+        if (req_len > 0) {
+            uint8_t pin = req[0];
+            uint8_t val = (req_len > 1) ? req[1] : 1;
+            if (pin < 32) {
+                g_gpio_pins[pin] = val;
+            }
+        }
         const char *ok = "OK";
         memcpy(reply, ok, 2);
         *out_len = 2;
