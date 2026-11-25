@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: write
+
 jobs:
   verification:
     name: Build & Verify
@@ -58,12 +61,17 @@ jobs:
             exit $RC
           fi
 
-      - name: Upload TSan log on failure
+      - name: Push TSan log on failure
         if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: tsan-log
-          path: tsan.log
+        run: |
+          if [ -f tsan.log ]; then
+            git config user.name "github-actions"
+            git config user.email "github-actions@github.com"
+            git checkout -B debug-tsan
+            git add -f tsan.log
+            git commit -m "debug: tsan failure log"
+            git push -f origin debug-tsan
+          fi
 
       - name: Run cross-language protocol conformance
         run: make test-conformance
