@@ -205,3 +205,122 @@ Sends an asynchronous, non-blocking one-way pulse:
 - Does not wait for a reply.
 - Returns immediately with `SRR_OK`.
 - Returns `SRR_QUEUE_FULL` if the channel queue depth is exhausted.
+
+---
+
+## 5. Wire Framing & Protocol Engine (`include/srr/srr_wire.h`)
+
+For cross-boundary, UART, USB CDC, and microcontroller communication:
+
+### CRC-16-CCITT
+```c
+uint16_t srr_crc16(const uint8_t *data, size_t len, uint16_t init_crc);
+```
+Calculates CCITT False checksum (poly `0x1021`, init `0xFFFF`) to detect line noise.
+
+### COBS Framing
+```c
+size_t srr_cobs_encode(const uint8_t *src, size_t src_len, uint8_t *dst, size_t dst_cap);
+size_t srr_cobs_decode(const uint8_t *src, size_t src_len, uint8_t *dst, size_t dst_cap);
+```
+Encodes and decodes arbitrary binary buffers with zero-byte delimiter `0x00` framing.
+
+### Complete Frame Encoding
+```c
+size_t srr_wire_encode_frame(
+    const srr_wire_header_t *hdr,
+    const void *payload,
+    size_t payload_len,
+    uint8_t *out_frame,
+    size_t out_cap);
+```
+Packs the 32-byte Little-Endian binary header, application payload, and 2-byte CRC-16 into a COBS-encoded frame terminated with `0x00`.
+
+### Streaming Chunk Parser (Zero Heap Allocation)
+```c
+void srr_wire_parser_init(srr_wire_parser_t *p, uint8_t *rx_buf, size_t rx_cap, uint8_t *decode_buf, size_t decode_cap);
+void srr_wire_parser_reset(srr_wire_parser_t *p);
+srr_parser_status_t srr_wire_parser_feed_byte(
+    srr_wire_parser_t *p,
+    uint8_t byte,
+    srr_wire_header_t *out_hdr,
+    const uint8_t **out_payload);
+```
+Tolerates arbitrary byte chunking (1-byte feeds, half-frames, multiple back-to-back frames) with zero dynamic allocation.
+
+---
+
+## 6. Serial Transport API (`include/srr/srr_serial.h`)
+
+Provides full-duplex communication over physical UART devices (`/dev/tty*`) and virtual links (`openpty`, `socketpair`):
+
+```c
+srr_serial_port_t* srr_serial_open(const char *device_path, const srr_serial_config_t *config);
+srr_serial_port_t* srr_serial_from_fd(int fd, bool owns_fd, const srr_serial_config_t *config);
+void srr_serial_close(srr_serial_port_t *port);
+
+int srr_serial_request(
+    srr_serial_port_t *port,
+    uint16_t service_id,
+    uint16_t operation_id,
+    const void *req_payload,
+    size_t req_len,
+    void *reply_buf,
+    size_t reply_cap,
+    size_t *actual_reply_len,
+    uint32_t timeout_ms);
+
+int srr_serial_pulse(
+    srr_serial_port_t *port,
+    uint16_t service_id,
+    uint16_t operation_id,
+    const void *payload,
+    size_t payload_len);
+```
+
+---
+
+## 7. Embedded Cooperative Profile API (`include/srr/srr_embedded.h`)
+
+Designed for bare-metal microcontrollers (Raspberry Pi Pico RP2040, ESP32, AVR Uno, Parallax P1) with zero dynamic allocation:
+
+### Endpoint Lifecycle & Registration
+```c
+int srr_endpoint_init(
+    srr_endpoint_t *ep,
+    uint32_t session_id,
+    srr_tx_fn_t tx_fn,
+    void *tx_user_data,
+    uint8_t *rx_buf, size_t rx_cap,
+    uint8_t *decode_buf, size_t decode_cap,
+    uint8_t *tx_buf, size_t tx_cap,
+    uint8_t *server_reply_buf, size_t server_reply_cap);
+
+int srr_endpoint_register_service(
+    srr_endpoint_t *ep,
+    uint16_t service_id,
+    srr_service_handler_t handler,
+    void *user_data);
+
+int srr_endpoint_register_pulse_handler(
+    srr_endpoint_t *ep,
+    srr_pulse_handler_t handler,
+    void *user_data);
+```
+
+### Main-Loop Byte Feeding & Timers
+```c
+srr_parser_status_t srr_endpoint_feed_byte(srr_endpoint_t *ep, uint8_t byte);
+void                srr_endpoint_feed_bytes(srr_endpoint_t *ep, const uint8_t *data, size_t len);
+void                srr_endpoint_tick(srr_endpoint_t *ep, uint32_t now_ms);
+int                 srr_endpoint_send_pulse(srr_endpoint_t *ep, uint16_t service_id, uint16_t operation_id, const void *payload, size_t payload_len);
+```
+
+### Asynchronous Client Operations
+```c
+uint64_t          srr_begin_request(srr_endpoint_t *ep, uint16_t service_id, uint16_t operation_id, const void *req, size_t req_len, uint8_t *reply, size_t cap, uint32_t timeout_ms, uint32_t now_ms);
+srr_trans_state_t srr_poll_transaction(srr_endpoint_t *ep, uint64_t trans_id);
+int               srr_collect_reply(srr_endpoint_t *ep, uint64_t trans_id, size_t *out_reply_len, int *out_error_code);
+int               srr_cancel_transaction(srr_endpoint_t *ep, uint64_t trans_id);
+```
+

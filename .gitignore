@@ -19,6 +19,9 @@ tests/test_srr_races
 tests/test_srr_stress
 tests/test_srr_ipc
 tests/test_srr_win32_pipe
+tests/test_srr_wire
+tests/test_srr_serial
+tests/test_srr_embedded
 tests/*.exe
 
 # Benchmark executables
@@ -28,6 +31,8 @@ benchmarks/*.exe
 # Example and adapter executables
 examples/synth_engine/synth_server
 examples/synth_engine/synth_cli
+examples/pico/pico_host_cli
+examples/pico/pico_device_sim
 adapters/beam/srr_port_driver
 
 # Core dumps, valgrind artifacts, and logs

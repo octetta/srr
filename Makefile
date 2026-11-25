@@ -3,17 +3,17 @@
 # ==============================================================================
 
 CC      ?= gcc
-CFLAGS  ?= -Wall -Wextra -Werror -pedantic -std=c99 -pthread -Iinclude
+CFLAGS  ?= -Wall -Wextra -Werror -pedantic -std=c99 -pthread -Iinclude/srr -Iinclude
 AR      ?= ar
 
 WIN_CC  ?= x86_64-w64-mingw32-gcc
 WIN_AR  ?= x86_64-w64-mingw32-ar
 
-SRC     := src/srr_pthread.c src/srr_ipc.c
+SRC     := src/srr_pthread.c src/srr_ipc.c src/srr_wire.c src/srr_serial.c src/srr_embedded.c
 OBJ     := $(SRC:.c=.o)
 LIB     := libsrr.a
 
-TEST_SRCS := tests/test_srr_basic.c tests/test_srr_races.c tests/test_srr_stress.c tests/test_srr_ipc.c
+TEST_SRCS := tests/test_srr_basic.c tests/test_srr_races.c tests/test_srr_stress.c tests/test_srr_ipc.c tests/test_srr_wire.c tests/test_srr_embedded.c tests/test_srr_serial.c
 TEST_BINS := $(TEST_SRCS:.c=)
 
 # Default target displays help
@@ -32,7 +32,7 @@ help:
 	@echo "  Build Targets:"
 	@echo "    make all             Build core library (libsrr.a), examples, and BEAM port driver"
 	@echo "    make lib             Build static library (libsrr.a)"
-	@echo "    make examples        Build synthesizer engine server & CLI (examples/synth_engine/)"
+	@echo "    make examples        Build synthesizer engine & Pico host/device examples"
 	@echo "    make beam            Build BEAM port driver (adapters/beam/srr_port_driver)"
 	@echo "    make win32           Cross-compile Windows library (libsrr_win32.a) and tests (MinGW)"
 	@echo ""
@@ -71,6 +71,8 @@ $(LIB): $(OBJ)
 examples: $(LIB)
 	$(CC) $(CFLAGS) examples/synth_engine/synth_server.c -L. -lsrr -o examples/synth_engine/synth_server
 	$(CC) $(CFLAGS) examples/synth_engine/synth_cli.c -L. -lsrr -o examples/synth_engine/synth_cli
+	$(CC) $(CFLAGS) examples/pico/pico_device_sim.c -L. -lsrr -o examples/pico/pico_device_sim
+	$(CC) $(CFLAGS) examples/pico/pico_host_cli.c -L. -lsrr -o examples/pico/pico_host_cli
 
 beam: $(LIB)
 	$(CC) $(CFLAGS) adapters/beam/src/srr_port_driver.c -L. -lsrr -o adapters/beam/srr_port_driver
@@ -83,11 +85,15 @@ win32:
 	@echo "--- Cross-compiling for Windows (x86_64-w64-mingw32) ---"
 	$(WIN_CC) $(CFLAGS) -c src/srr_pthread.c -o src/srr_pthread.win.o
 	$(WIN_CC) $(CFLAGS) -c src/srr_win32.c -o src/srr_win32.win.o
-	$(WIN_AR) rcs libsrr_win32.a src/srr_pthread.win.o src/srr_win32.win.o
+	$(WIN_CC) $(CFLAGS) -c src/srr_wire.c -o src/srr_wire.win.o
+	$(WIN_CC) $(CFLAGS) -c src/srr_embedded.c -o src/srr_embedded.win.o
+	$(WIN_AR) rcs libsrr_win32.a src/srr_pthread.win.o src/srr_win32.win.o src/srr_wire.win.o src/srr_embedded.win.o
 	$(WIN_CC) $(CFLAGS) tests/test_srr_basic.c -L. -lsrr_win32 -o tests/test_srr_basic.exe
 	$(WIN_CC) $(CFLAGS) tests/test_srr_races.c -L. -lsrr_win32 -o tests/test_srr_races.exe
 	$(WIN_CC) $(CFLAGS) tests/test_srr_stress.c -L. -lsrr_win32 -o tests/test_srr_stress.exe
 	$(WIN_CC) $(CFLAGS) tests/test_srr_win32_pipe.c -L. -lsrr_win32 -o tests/test_srr_win32_pipe.exe
+	$(WIN_CC) $(CFLAGS) tests/test_srr_wire.c -L. -lsrr_win32 -o tests/test_srr_wire.exe
+	$(WIN_CC) $(CFLAGS) tests/test_srr_embedded.c -L. -lsrr_win32 -o tests/test_srr_embedded.exe
 	@echo "Windows build completed successfully: libsrr_win32.a"
 
 # ------------------------------------------------------------------------------
@@ -103,6 +109,9 @@ test: $(LIB) $(TEST_BINS)
 	./tests/test_srr_races
 	./tests/test_srr_stress
 	./tests/test_srr_ipc
+	./tests/test_srr_wire
+	./tests/test_srr_embedded
+	./tests/test_srr_serial
 	@echo "All native tests passed!"
 
 test-valgrind: $(LIB) $(TEST_BINS)
@@ -111,6 +120,9 @@ test-valgrind: $(LIB) $(TEST_BINS)
 	valgrind --leak-check=full --error-exitcode=1 ./tests/test_srr_races
 	valgrind --leak-check=full --error-exitcode=1 ./tests/test_srr_stress
 	valgrind --leak-check=full --error-exitcode=1 ./tests/test_srr_ipc
+	valgrind --leak-check=full --error-exitcode=1 ./tests/test_srr_wire
+	valgrind --leak-check=full --error-exitcode=1 ./tests/test_srr_embedded
+	valgrind --leak-check=full --error-exitcode=1 ./tests/test_srr_serial
 	@echo "All Valgrind checks passed with 0 errors and 0 leaks!"
 
 test-adapters: examples beam
@@ -141,9 +153,10 @@ benchmarks/%: benchmarks/%.c $(LIB)
 # ------------------------------------------------------------------------------
 
 clean:
-	rm -f src/*.o src/*.win.o tests/test_srr_basic tests/test_srr_races tests/test_srr_stress tests/test_srr_ipc tests/*.exe
+	rm -f src/*.o src/*.win.o tests/test_srr_basic tests/test_srr_races tests/test_srr_stress tests/test_srr_ipc tests/test_srr_wire tests/test_srr_embedded tests/test_srr_serial tests/*.exe
 	rm -f benchmarks/bench_srr benchmarks/*.exe
 	rm -f examples/synth_engine/synth_server examples/synth_engine/synth_cli
+	rm -f examples/pico/pico_device_sim examples/pico/pico_host_cli
 	rm -f adapters/beam/srr_port_driver
 	rm -f $(LIB) libsrr_win32.a vgcore.* core.* *.log
 	@echo "Clean completed."
