@@ -24,6 +24,7 @@ jobs:
             build-essential \
             valgrind \
             gcc-arm-none-eabi \
+            libnewlib-arm-none-eabi \
             gcc-avr \
             avr-libc \
             python3 \
