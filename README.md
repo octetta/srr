@@ -155,6 +155,28 @@ int main(void) {
 }
 ```
 
+### 3. BEAM Ecosystem (Erlang, Elixir, Gleam)
+
+```erlang
+%% Erlang: Synchronous GenServer call & async pulse
+{ok, Client} = srr_client:start_link("srr_synth").
+{ok, Reply} = srr_client:call(Client, <<"STATUS">>).
+ok = srr_client:pulse(Client, 1, 16).
+```
+
+```elixir
+# Elixir: Supervised GenServer client
+{:ok, reply} = SRR.call(client, "SET cutoff 1750.0\0")
+:ok = SRR.pulse(client, 1, 16)
+```
+
+```gleam
+// Gleam: Type-safe BitArray wire encoding or Erlang FFI
+let assert Ok(client) = srr.connect("srr_synth")
+let assert Ok(reply) = srr.call(client, <<"STATUS":utf8, 0:8>>)
+let _ = srr.pulse(client, 1, 16)
+```
+
 ---
 
 ## Command-Line Tool (`tools/srr_cli`)
@@ -183,13 +205,16 @@ SRR includes a developer CLI for querying, benchmarking, and interacting with en
 # Build static library libsrr.a, examples, CLI tools, and BEAM port driver
 make all
 
-# Run all 10 native unit and integration test suites
+# Run all 11 native unit and integration test suites
 make test
 
-# Run all 10 test suites under Valgrind (0 errors, 0 memory leaks check)
+# Run all 11 test suites under Valgrind (0 errors, 0 memory leaks check)
 make test-valgrind
 
-# Run BEAM (Erlang/Elixir) and WebAudio WebSocket gateway integration tests
+# Run BEAM (Erlang, Elixir, Gleam) integration tests
+make test-beam
+
+# Run full adapter suite (BEAM + WebAudio browser gateway)
 make test-adapters
 
 # Execute complete verification suite

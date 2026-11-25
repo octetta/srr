@@ -18,7 +18,7 @@ TEST_BINS := $(TEST_SRCS:.c=)
 
 # Default target displays help
 .DEFAULT_GOAL := help
-.PHONY: help all lib examples tools beam win32 test test-valgrind test-adapters test-scripts test-all bench clean
+.PHONY: help all lib examples tools beam test-beam win32 test test-valgrind test-adapters test-scripts test-all bench clean
 
 # ------------------------------------------------------------------------------
 # Help Target
@@ -39,6 +39,7 @@ help:
 	@echo "  Testing & Quality Assurance:"
 	@echo "    make test            Build and execute all native test suites"
 	@echo "    make test-valgrind   Run all test suites under Valgrind (zero leak/error check)"
+	@echo "    make test-beam       Run BEAM (Erlang, Elixir, Gleam) integration tests"
 	@echo "    make test-adapters   Run BEAM and WebAudio browser gateway integration tests"
 	@echo "    make test-all        Execute complete verification (test-valgrind + test-adapters)"
 	@echo ""
@@ -79,6 +80,10 @@ tools: $(LIB)
 
 beam: $(LIB)
 	$(CC) $(CFLAGS) adapters/beam/src/srr_port_driver.c -L. -lsrr -o adapters/beam/srr_port_driver
+	@if command -v erlc >/dev/null 2>&1; then \
+		echo "Compiling Erlang srr_client.erl..."; \
+		erlc -o adapters/beam/src adapters/beam/src/srr_client.erl; \
+	fi
 
 # ------------------------------------------------------------------------------
 # Windows MinGW Cross-Compilation
@@ -135,6 +140,19 @@ test-valgrind: $(LIB) $(TEST_BINS)
 	valgrind --leak-check=full --error-exitcode=1 ./tests/test_srr_p1
 	valgrind --leak-check=full --error-exitcode=1 ./tests/test_srr_udp
 	@echo "All Valgrind checks passed with 0 errors and 0 leaks!"
+
+test-beam: examples beam
+	@echo "--- Running BEAM (Erlang, Elixir, Gleam) Integration Tests ---"
+	python3 adapters/beam/test/test_beam_adapter.py
+	@if command -v mix >/dev/null 2>&1; then \
+		echo "Compiling Elixir package..."; \
+		(cd adapters/elixir && mix compile); \
+	fi
+	@if command -v gleam >/dev/null 2>&1; then \
+		echo "Checking Gleam package..."; \
+		(cd adapters/gleam && gleam check); \
+	fi
+	@echo "BEAM tests passed!"
 
 test-adapters: examples beam
 	@echo "--- Running BEAM & WebAudio Gateway Integration Tests ---"
