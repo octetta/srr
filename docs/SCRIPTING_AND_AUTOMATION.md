@@ -10,11 +10,14 @@ The repository includes zero-dependency client implementations across 7 scriptin
 
 | Language | File | Transport Mechanism | External Dependencies |
 |---|---|---|:---:|
+| **Go** | [`adapters/go/`](../adapters/go/) / [`examples/go/`](../examples/go/) | Client & Concurrent Server (`net`, `encoding/binary`) | **None** (Standard library) |
 | **Bash / Shell** | [`shell_automation.sh`](../examples/scripting/shell_automation.sh) | `tools/srr_cli` | **None** (pure Bash) |
-| **Python** | [`srr_client.py`](../examples/scripting/srr_client.py) | Unix Domain Socket (`socket`, `struct`) | **None** (Standard library) |
-| **Perl** | [`srr_client.pl`](../examples/scripting/srr_client.pl) | Unix Domain Socket (`IO::Socket::UNIX`) | **None** (Core Perl) |
+| **Python** | [`srr_client.py`](../examples/scripting/srr_client.py) / [`adapters/python/`](../adapters/python/) | Unix Domain Socket & UDP (`socket`, `struct`) | **None** (Standard library) |
+| **Perl** | [`srr_client.pl`](../examples/scripting/srr_client.pl) / [`adapters/perl/`](../adapters/perl/) | Unix Domain Socket & UDP (`IO::Socket::UNIX`) | **None** (Core Perl) |
+| **Node.js** | [`adapters/node/`](../adapters/node/) | Async IPC & UDP (`net`, `dgram`) | **None** (Standard library) |
+| **Ruby** | [`adapters/ruby/`](../adapters/ruby/) | Unix Domain Socket & UDP (`UNIXSocket`) | **None** (Core Ruby) |
 | **Tcl** | [`srr_client.tcl`](../examples/scripting/srr_client.tcl) | Native pipes / CLI | **None** (Core Tcl) |
-| **PHP** | [`srr_client.php`](../examples/scripting/srr_client.php) | Unix Domain Socket (`stream_socket_client`) | **None** (Core PHP) |
+| **PHP** | [`srr_client.php`](../examples/scripting/srr_client.php) / [`adapters/php/`](../adapters/php/) | Unix Domain Socket & UDP (`stream_socket_client`) | **None** (Core PHP) |
 | **PowerShell** | [`srr_client.ps1`](../examples/scripting/srr_client.ps1) | Windows Named Pipe / Unix Socket (.NET) | **None** (Standard .NET) |
 | **Gforth** | [`srr_client.fs`](../examples/scripting/srr_client.fs) | Forth stack & subprocess bridge | **None** (Standard Forth) |
 

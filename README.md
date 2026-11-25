@@ -199,6 +199,26 @@ SRR includes a developer CLI for querying, benchmarking, and interacting with en
 
 ---
 
+## Language Adapters & Multi-Language Ecosystem
+
+In addition to the C library (`libsrr.a`, `libsrr.so`), SRR provides first-class, standalone language-native libraries under `adapters/`. Each adapter is written strictly with standard libraries—requiring **zero third-party dependencies** and zero C compiler toolchains:
+
+| Language | Directory | Key Facilities | Transports | Status |
+|---|---|---|---|:---:|
+| **Go** | [`adapters/go/`](adapters/go/) | Client & Server, Goroutine pools | IPC (Unix Sockets), UDP, Pulses | Native Standard Library |
+| **Python** | [`adapters/python/`](adapters/python/) | Synchronous client, Resolver, Context managers | IPC (Unix Sockets), UDP, Pulses | Native Standard Library |
+| **Node.js** | [`adapters/node/`](adapters/node/) | Promise/async API, zero npm dependencies | IPC (Unix Sockets), UDP, Pulses | Native Standard Library |
+| **Ruby** | [`adapters/ruby/`](adapters/ruby/) | Pure Ruby client, zero gems | IPC (Unix Sockets), UDP, Pulses | Native Standard Library |
+| **Perl** | [`adapters/perl/`](adapters/perl/) | Pure Perl client, zero CPAN | IPC (Unix Sockets), UDP, Pulses | Native Standard Library |
+| **PHP** | [`adapters/php/`](adapters/php/) | Pure PHP client, zero PECL | IPC (Unix Sockets), UDP, Pulses | Native Standard Library |
+| **Erlang (BEAM)** | [`adapters/beam/`](adapters/beam/) | OTP `gen_server`, Port Driver | IPC, Stdio Packet Bridge | Native OTP |
+| **Elixir** | [`adapters/elixir/`](adapters/elixir/) | Mix package, `GenServer` client | IPC (Unix Sockets), Pulses | Native BEAM |
+| **Gleam** | [`adapters/gleam/`](adapters/gleam/) | Bitstring wire framing, type-safe RPC | IPC (Unix Sockets), Pulses | Native BEAM |
+
+See the [`examples/go/`](examples/go/) directory for runnable Go client and microservice server implementations.
+
+---
+
 ## Building and Verification
 
 ```bash

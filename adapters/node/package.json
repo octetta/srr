@@ -1,0 +1,20 @@
+{
+  "name": "srr-client",
+  "version": "0.1.0",
+  "description": "Pure Node.js client and protocol implementation for SRR (Synchronous Send/Receive/Reply)",
+  "main": "index.js",
+  "scripts": {
+    "test": "node test/test_client.js"
+  },
+  "keywords": [
+    "srr",
+    "ipc",
+    "send-receive-reply",
+    "microservices",
+    "embedded",
+    "udp"
+  ],
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

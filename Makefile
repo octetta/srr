@@ -165,6 +165,8 @@ test-adapters: examples beam
 	@echo "--- Running BEAM & WebAudio Gateway Integration Tests ---"
 	python3 adapters/beam/test/test_beam_adapter.py
 	python3 gateway/test_gateway.py
+	@echo "--- Running Native Language Adapters (Python, Perl, Go, Node, Ruby, PHP) ---"
+	python3 adapters/test_native_adapters.py
 	@echo "All adapter integration tests passed!"
 
 test-scripts: tools examples
@@ -200,6 +202,7 @@ clean:
 	rm -f examples/synth_engine/synth_server examples/synth_engine/synth_cli
 	rm -f examples/pico/pico_device_sim examples/pico/pico_host_cli
 	rm -f tools/srr_cli tools/srr_resolver
+	rm -rf examples/go/bin
 	rm -f adapters/beam/srr_port_driver
 	rm -f $(LIB) libsrr.so libsrr_win32.a vgcore.* core.* *.log
 	@echo "Clean completed."

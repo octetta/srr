@@ -1,0 +1,14 @@
+{
+  "name": "srr/client",
+  "description": "Pure PHP client and protocol library for SRR (Synchronous Send/Receive/Reply)",
+  "type": "library",
+  "license": "MIT",
+  "autoload": {
+    "psr-4": {
+      "SRR\\": "src/"
+    }
+  },
+  "require": {
+    "php": ">=7.4"
+  }
+}
