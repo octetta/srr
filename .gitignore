@@ -11,6 +11,7 @@
 
 # Root libraries
 libsrr.a
+libsrr.so
 libsrr_win32.a
 
 # Test executables

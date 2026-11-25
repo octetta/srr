@@ -126,7 +126,10 @@ if __name__ == "__main__":
 
     # Start synth_server
     server_proc = subprocess.Popen([server_bin, service_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(0.15)
+    for _ in range(40):
+        if os.path.exists(sock_path):
+            break
+        time.sleep(0.05)
 
     try:
         test_direct_beam_wire_protocol(sock_path)

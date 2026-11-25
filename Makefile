@@ -18,7 +18,7 @@ TEST_BINS := $(TEST_SRCS:.c=)
 
 # Default target displays help
 .DEFAULT_GOAL := help
-.PHONY: help all lib examples tools beam test-beam win32 test test-valgrind test-adapters test-scripts test-all bench clean
+.PHONY: help all lib shared examples tools beam test-beam win32 test test-valgrind test-adapters test-scripts test-all bench clean
 
 # ------------------------------------------------------------------------------
 # Help Target
@@ -32,6 +32,7 @@ help:
 	@echo "  Build Targets:"
 	@echo "    make all             Build core library (libsrr.a), examples, and BEAM port driver"
 	@echo "    make lib             Build static library (libsrr.a)"
+	@echo "    make shared          Build dynamic shared library (libsrr.so) for scripting FFI"
 	@echo "    make examples        Build synthesizer engine & Pico host/device examples"
 	@echo "    make beam            Build BEAM port driver (adapters/beam/srr_port_driver)"
 	@echo "    make win32           Cross-compile Windows library (libsrr_win32.a) and tests (MinGW)"
@@ -62,6 +63,9 @@ lib: $(LIB)
 $(LIB): $(OBJ)
 	$(AR) rcs $@ $^
 
+shared: $(SRC)
+	$(CC) $(CFLAGS) -fPIC -shared $(SRC) -o libsrr.so
+
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -70,17 +74,17 @@ $(LIB): $(OBJ)
 # ------------------------------------------------------------------------------
 
 examples: $(LIB)
-	$(CC) $(CFLAGS) examples/synth_engine/synth_server.c -L. -lsrr -o examples/synth_engine/synth_server
-	$(CC) $(CFLAGS) examples/synth_engine/synth_cli.c -L. -lsrr -o examples/synth_engine/synth_cli
-	$(CC) $(CFLAGS) examples/pico/pico_device_sim.c -L. -lsrr -o examples/pico/pico_device_sim
-	$(CC) $(CFLAGS) examples/pico/pico_host_cli.c -L. -lsrr -o examples/pico/pico_host_cli
+	$(CC) $(CFLAGS) examples/synth_engine/synth_server.c $(LIB) -o examples/synth_engine/synth_server
+	$(CC) $(CFLAGS) examples/synth_engine/synth_cli.c $(LIB) -o examples/synth_engine/synth_cli
+	$(CC) $(CFLAGS) examples/pico/pico_device_sim.c $(LIB) -o examples/pico/pico_device_sim
+	$(CC) $(CFLAGS) examples/pico/pico_host_cli.c $(LIB) -o examples/pico/pico_host_cli
 
 tools: $(LIB)
-	$(CC) $(CFLAGS) tools/srr_cli.c -L. -lsrr -o tools/srr_cli
-	$(CC) $(CFLAGS) tools/srr_resolver.c -L. -lsrr -o tools/srr_resolver
+	$(CC) $(CFLAGS) tools/srr_cli.c $(LIB) -o tools/srr_cli
+	$(CC) $(CFLAGS) tools/srr_resolver.c $(LIB) -o tools/srr_resolver
 
 beam: $(LIB)
-	$(CC) $(CFLAGS) adapters/beam/src/srr_port_driver.c -L. -lsrr -o adapters/beam/srr_port_driver
+	$(CC) $(CFLAGS) adapters/beam/src/srr_port_driver.c $(LIB) -o adapters/beam/srr_port_driver
 	@if command -v erlc >/dev/null 2>&1; then \
 		echo "Compiling Erlang srr_client.erl..."; \
 		erlc -o adapters/beam/src adapters/beam/src/srr_client.erl; \
@@ -110,7 +114,7 @@ win32:
 # ------------------------------------------------------------------------------
 
 tests/%: tests/%.c $(LIB)
-	$(CC) $(CFLAGS) $< -L. -lsrr -o $@
+	$(CC) $(CFLAGS) $< $(LIB) -o $@
 
 test: $(LIB) $(TEST_BINS)
 	@echo "--- Running Native Test Suites ---"
@@ -197,5 +201,5 @@ clean:
 	rm -f examples/pico/pico_device_sim examples/pico/pico_host_cli
 	rm -f tools/srr_cli tools/srr_resolver
 	rm -f adapters/beam/srr_port_driver
-	rm -f $(LIB) libsrr_win32.a vgcore.* core.* *.log
+	rm -f $(LIB) libsrr.so libsrr_win32.a vgcore.* core.* *.log
 	@echo "Clean completed."
