@@ -77,12 +77,54 @@ The exact same Send / Receive / Reply code and error contracts operate across fo
 
 ---
 
-## What SRR Is Good For
+## Why Use SRR in Your System? The 4 Real-World Scenarios
 
-* **Unifying Host & Microcontroller Control Planes:** Instead of using mutexes for threads, Unix domain sockets for IPC, HTTP/REST for daemons, and ad-hoc serial protocols for microcontrollers, SRR provides **one uniform communication model** across all tiers: in-process C threads, host IPC (Linux/macOS/Windows), network UDP, and bare-metal MCUs (RP2040 Pico, AVR ATmega328P, ESP32, Parallax Propeller P1).
-* **Predictable, Single-Winner Transactions:** Unlike publish-subscribe or raw streaming sockets where message boundaries, ordering, and delivery guarantees are ambiguous, SRR enforces a strict synchronous contract: a transaction is answered exactly once with `srr_reply()`, or deterministically resolves to a terminal failure (`SRR_TIMEOUT`, `SRR_DISCONNECTED`, `SRR_CANCELLED`). Race conditions between late replies, timeouts, and disconnects are arbitrated with 100% precision.
-* **Zero-Heap, Memory-Constrained Hardware:** Embedded profiles operate entirely on statically provided buffers without dynamic memory allocation (`malloc`), fitting inside as little as 335 bytes of RAM on an 8-bit Arduino ATmega328P.
-* **Polyglot Glue:** Native language adapters (Go, Python, Perl, Node.js, Ruby, PHP, BEAM/Erlang/Elixir/Gleam, Tcl, and Shell) can orchestrate, test, and control hardware devices and background C daemons identically.
+1. **You Have a Heterogeneous Stack (Polyglot Software + Hardware):**
+   Most real-world systems mix technologies: a UI in Go or Python, a high-speed DSP or crypto daemon in C, and a motor or sensor pod on an embedded microcontroller (Pico, ESP32, Arduino).
+   - *Without SRR:* You write gRPC or HTTP between Go and Python, Unix sockets with ad-hoc framing between Go and C, and custom binary packets over UART to the microcontroller. You now maintain **three completely different communication stacks**, three different timeout mechanisms, and three sets of parsing bugs.
+   - *With SRR:* Every tier speaks the exact same Send/Receive/Reply contract. Your Go service can issue an RPC directly to an Arduino motor controller using the identical API it uses to talk to a local C daemon.
+
+2. **You Want Synchronous RPC That Cannot Desynchronize (The Stale-Reply Trap):**
+   In standard raw sockets (TCP or Unix Domain Sockets), if a client sets a 100 ms timeout and the server takes 105 ms to answer:
+   - The client times out and moves on.
+   - The server's late reply sits quietly in the socket buffer.
+   - When the client sends its *next* request and reads, **it receives the stale reply from the previous transaction**. Your data is now silently corrupted.
+   - *With SRR:* Every transaction has an automatic 32-bit transaction ID and an atomic single-winner state machine. If a timeout fires, that transaction is permanently dead. Any late reply is discarded automatically by SRR. Your message stream never desynchronizes.
+
+3. **You Want Thread Safety Without Mutex Deadlocks:**
+   If you are passing data between C threads, wrapping shared memory in `pthread_mutex_t` and `pthread_cond_t` leads to race conditions, priority inversion, and deadlocks. With SRR, threads communicate by passing discrete messages into bounded channels (`srr_send` blocks until `srr_reply`), achieving clean message-passing concurrency with **6.7 µs latency**.
+
+4. **You Need to Run on Zero-Heap Silicon:**
+   You cannot run gRPC, ZeroMQ, or HTTP servers on a bare-metal microcontroller with 2 KB of RAM. SRR's embedded profiles use **zero bytes of dynamic heap allocation (`malloc`)**. It fits in **335 bytes of RAM** on an 8-bit Arduino ATmega328P.
+
+---
+
+## Message-Oriented: What Can You Send Across It?
+
+**SRR is 100% discrete message-oriented, never stream-oriented.**
+
+You **never** have to write a while-loop to handle partial reads, track byte counts, search for newline `\n` delimiters, or assemble fragmented TCP/serial streams in your application.
+
+* A call to `srr_send(conn, buf, 42, ...)` delivers **exactly one discrete message of 42 bytes** to `srr_receive()`.
+* When the server calls `srr_reply(req, reply_buf, 3)`, the client unblocks with **exactly one discrete reply of 3 bytes**.
+* Over physical byte streams (serial UART, USB CDC, or TCP), SRR's framing engine automatically packetizes and verifies the frame using **COBS (Consistent Overhead Byte Stuffing)** and a **CRC-16 checksum**.
+
+### What Types of Data Can You Send?
+
+SRR treats payloads as **opaque byte buffers (`const void *`)**, meaning you can send anything:
+
+| Payload Type | Example | When to Use |
+| :--- | :--- | :--- |
+| **Plain Text / ASCII** | `"SET volume 80"`, `"STATUS"` | Simple command shells, CLI tools, debugging scripts. |
+| **Structured Text** | JSON, YAML, or XML strings | Web gateways, browser dashboards, configuration files. |
+| **Binary C Structs** | `struct sensor_packet { float x, y, z; uint32_t t; }` | High-performance telemetry, robotics, audio DSP. Zero serialization overhead. |
+| **Binary Serialization** | Protocol Buffers, FlatBuffers, CBOR, MessagePack | Schema-driven polyglot architectures. |
+| **Native Pulses** | `srr_pulse(conn, code, value)` | **Zero payload overhead:** Sends a 32-bit `code` and 64-bit `value` directly in the header (ideal for ticks, alarms, and GPIO triggers). |
+
+Every request also carries built-in routing metadata in its 32-byte wire header:
+* `service_id` (16-bit): Target service (e.g., `10 = MotorController`, `20 = AudioEngine`).
+* `operation_id` (16-bit): Action to perform (e.g., `1 = Start`, `2 = SetSpeed`).
+* `trans_id` (32-bit): Unique correlation ID managed automatically by SRR.
 
 ---
 
