@@ -11,7 +11,7 @@ SRR provides a synchronous **Send / Receive / Reply** service communication mode
 - **Three-Tier Architecture:** Complete separation between transaction state logic, wire framing/serialization, and platform execution backends.
 - **Zero-Heap Embedded Profiles:** Dedicated profiles for microcontrollers (RP2040 Pico, AVR ATmega328P, ESP32, and Parallax Propeller P1) operating entirely on caller-provided static buffers without dynamic heap allocation.
 - **Empirical Performance:** Median round-trip latency of **6.7 µs** in-process, up to **446,000 transactions/sec** on multi-threaded workloads, and **2.78 Million frames/sec** COBS framing throughput.
-- **Zero Leaks & Race-Free:** 100% verified across 10 test suites under Valgrind with zero memory leaks and zero errors.
+- **Zero Leaks & Race-Free:** 100% verified across 11 test suites under Valgrind with zero memory leaks and zero errors.
 
 ---
 
@@ -36,7 +36,7 @@ SRR provides a synchronous **Send / Receive / Reply** service communication mode
 |  - AVR Tiny Profile (ATmega328P)   |  +-----------------------------------------------+
 |  - ESP32 FreeRTOS Task Adapter     |                          |
 |  - Parallax P1 Multi-Cog Hub RAM   |                  Physical Transports
-+------------------------------------+          (Serial UART, USB CDC, Loopback)
++------------------------------------+          (Serial UART, UDP Datagram, USB CDC)
 ```
 
 ---

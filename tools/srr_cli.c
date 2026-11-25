@@ -10,6 +10,7 @@
 #include "srr/srr.h"
 #include "srr_serial.h"
 #include "srr_wire.h"
+#include "srr_udp.h"
 
 static void print_usage(const char *prog) {
     printf("SRR Command-Line Tool\n\n");
@@ -19,6 +20,7 @@ static void print_usage(const char *prog) {
     printf("  --ipc <name>             Target IPC service (Unix domain socket)\n");
     printf("  --serial <dev>           Target serial device (e.g. /dev/ttyACM0, /dev/ttyUSB0)\n");
     printf("  --baud <rate>            Serial baud rate (default: 115200)\n");
+    printf("  --udp <host:port>        Target remote UDP endpoint (e.g. 192.168.1.50:8888)\n");
     printf("  --sim                    Target built-in simulated Pico endpoint\n\n");
     printf("Subcommands:\n");
     printf("  info                     Query device.info (Service 1, Op 1)\n");
@@ -47,6 +49,7 @@ int main(int argc, char **argv) {
 
     const char *ipc_name = NULL;
     const char *serial_dev = NULL;
+    const char *udp_target = NULL;
     uint32_t baud_rate = 115200;
     bool is_sim = false;
     int cmd_idx = 1;
@@ -58,6 +61,9 @@ int main(int argc, char **argv) {
             cmd_idx += 2;
         } else if (strcmp(argv[cmd_idx], "--serial") == 0 && cmd_idx + 1 < argc) {
             serial_dev = argv[cmd_idx + 1];
+            cmd_idx += 2;
+        } else if (strcmp(argv[cmd_idx], "--udp") == 0 && cmd_idx + 1 < argc) {
+            udp_target = argv[cmd_idx + 1];
             cmd_idx += 2;
         } else if (strcmp(argv[cmd_idx], "--baud") == 0 && cmd_idx + 1 < argc) {
             baud_rate = (uint32_t)atoi(argv[cmd_idx + 1]);
@@ -83,6 +89,7 @@ int main(int argc, char **argv) {
     pid_t sim_pid = 0;
     srr_connection_t *ipc_conn = NULL;
     srr_serial_port_t *serial_port = NULL;
+    srr_udp_endpoint_t *udp_ep = NULL;
 
     /* Establish connection based on target */
     if (is_sim) {
@@ -119,6 +126,25 @@ int main(int argc, char **argv) {
             fprintf(stderr, "Error: Could not open serial device %s (baud: %u)\n", serial_dev, baud_rate);
             return 1;
         }
+    } else if (udp_target) {
+        char host[128] = {0};
+        uint16_t port = SRR_UDP_DEFAULT_PORT;
+        char *colon = strchr(udp_target, ':');
+        if (colon) {
+            size_t host_len = colon - udp_target;
+            if (host_len >= sizeof(host)) host_len = sizeof(host) - 1;
+            strncpy(host, udp_target, host_len);
+            port = (uint16_t)atoi(colon + 1);
+        } else {
+            strncpy(host, udp_target, sizeof(host) - 1);
+        }
+        srr_udp_config_t ucfg;
+        srr_udp_default_config(&ucfg);
+        udp_ep = srr_udp_client_create(host, port, &ucfg);
+        if (!udp_ep) {
+            fprintf(stderr, "Error: Could not initialize UDP client for %s:%u\n", host, port);
+            return 1;
+        }
     } else if (ipc_name) {
         srr_status_t st = srr_connect(ipc_name, NULL, &ipc_conn);
         if (st != SRR_OK) {
@@ -126,7 +152,7 @@ int main(int argc, char **argv) {
             return 1;
         }
     } else {
-        fprintf(stderr, "Error: No target specified. Use --ipc <name>, --serial <dev>, or --sim\n\n");
+        fprintf(stderr, "Error: No target specified. Use --ipc <name>, --serial <dev>, --udp <host:port>, or --sim\n\n");
         print_usage(argv[0]);
         return 1;
     }
@@ -145,6 +171,15 @@ int main(int argc, char **argv) {
                 printf("Device Info: %s\n", reply);
             } else {
                 fprintf(stderr, "Error querying info: code %d\n", rc);
+                exit_code = 2;
+            }
+        } else if (udp_ep) {
+            int rc = srr_udp_request(udp_ep, 1, 1, NULL, 0, reply, sizeof(reply) - 1, &actual_len, 2000);
+            if (rc == 0) {
+                reply[actual_len] = '\0';
+                printf("UDP Device Info: %s\n", reply);
+            } else {
+                fprintf(stderr, "Error querying UDP info: code %d\n", rc);
                 exit_code = 2;
             }
         } else if (ipc_conn) {
@@ -169,6 +204,15 @@ int main(int argc, char **argv) {
                 printf("PONG received in %.2f µs (Payload: %.*s)\n", (double)(t1 - t0) / 1000.0, (int)actual_len, reply);
             } else {
                 fprintf(stderr, "Ping failed: code %d\n", rc);
+                exit_code = 2;
+            }
+        } else if (udp_ep) {
+            int rc = srr_udp_request(udp_ep, 1, 1, "PING", 4, reply, sizeof(reply) - 1, &actual_len, 2000);
+            uint64_t t1 = get_time_ns();
+            if (rc == 0) {
+                printf("PONG received via UDP in %.2f µs (Reply: %.*s)\n", (double)(t1 - t0) / 1000.0, (int)actual_len, reply);
+            } else {
+                fprintf(stderr, "UDP Ping failed: code %d\n", rc);
                 exit_code = 2;
             }
         } else if (ipc_conn) {
@@ -206,6 +250,18 @@ int main(int argc, char **argv) {
                     fprintf(stderr, "Request failed: code %d\n", rc);
                     exit_code = 2;
                 }
+            } else if (udp_ep) {
+                int rc = srr_udp_request(udp_ep, svc, op, payload_str, payload_len, reply, sizeof(reply) - 1, &actual_len, 2000);
+                if (rc == 0) {
+                    reply[actual_len] = '\0';
+                    printf("[UDP REPLY (%zu bytes)]: %s\n", actual_len, reply);
+                } else if (rc == -3) {
+                    printf("[ERROR]: UDP Endpoint returned error frame for Service %u, Op %u\n", svc, op);
+                    exit_code = 3;
+                } else {
+                    fprintf(stderr, "UDP Request failed: code %d\n", rc);
+                    exit_code = 2;
+                }
             } else if (ipc_conn) {
                 srr_status_t st = srr_send(ipc_conn, payload_str, payload_len, reply, sizeof(reply) - 1, &actual_len);
                 if (st == SRR_OK) {
@@ -234,6 +290,14 @@ int main(int argc, char **argv) {
                     fprintf(stderr, "Failed to send pulse: code %d\n", rc);
                     exit_code = 2;
                 }
+            } else if (udp_ep) {
+                int rc = srr_udp_pulse(udp_ep, svc, op, data_str, strlen(data_str));
+                if (rc == 0) {
+                    printf("[OK] UDP Pulse transmitted successfully (Service %u, Op %u)\n", svc, op);
+                } else {
+                    fprintf(stderr, "Failed to send UDP pulse: code %d\n", rc);
+                    exit_code = 2;
+                }
             } else if (ipc_conn) {
                 srr_status_t st = srr_pulse(ipc_conn, svc, op);
                 if (st == SRR_OK) {
@@ -252,6 +316,7 @@ int main(int argc, char **argv) {
 
     /* Cleanup */
     if (serial_port) srr_serial_close(serial_port);
+    if (udp_ep) srr_udp_close(udp_ep);
     if (ipc_conn) srr_disconnect(ipc_conn);
     if (sim_pid > 0) {
         kill(sim_pid, SIGTERM);

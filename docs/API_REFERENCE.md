@@ -324,3 +324,66 @@ int               srr_collect_reply(srr_endpoint_t *ep, uint64_t trans_id, size_
 int               srr_cancel_transaction(srr_endpoint_t *ep, uint64_t trans_id);
 ```
 
+---
+
+## 8. UDP Datagram Transport API (`include/srr/srr_udp.h`)
+
+Enables synchronous Send/Receive/Reply and one-way pulses over local Ethernet / Wi-Fi UDP datagrams without TCP/TLS overhead.
+
+### Configuration & Lifecycle
+```c
+void srr_udp_default_config(srr_udp_config_t *cfg);
+srr_udp_endpoint_t* srr_udp_client_create(const char *remote_host, uint16_t remote_port, const srr_udp_config_t *config);
+srr_udp_endpoint_t* srr_udp_server_create(uint16_t local_port, const srr_udp_config_t *config);
+void srr_udp_close(srr_udp_endpoint_t *ep);
+```
+
+### Client Operations
+```c
+int srr_udp_request(
+    srr_udp_endpoint_t *ep,
+    uint16_t service_id,
+    uint16_t operation_id,
+    const void *req_payload,
+    size_t req_len,
+    void *reply_buf,
+    size_t reply_cap,
+    size_t *actual_reply_len,
+    uint32_t timeout_ms
+);
+
+int srr_udp_pulse(
+    srr_udp_endpoint_t *ep,
+    uint16_t service_id,
+    uint16_t operation_id,
+    const void *payload,
+    size_t payload_len
+);
+```
+
+### Server Operations
+```c
+int srr_udp_server_receive(
+    srr_udp_endpoint_t *ep,
+    srr_wire_header_t *out_hdr,
+    uint8_t *payload_buf,
+    size_t payload_cap,
+    size_t *actual_payload_len,
+    srr_udp_peer_t **out_peer,
+    uint32_t timeout_ms
+);
+
+int srr_udp_server_reply(
+    srr_udp_endpoint_t *ep,
+    const srr_udp_peer_t *peer,
+    uint64_t trans_id,
+    uint16_t service_id,
+    uint16_t operation_id,
+    const void *reply_payload,
+    size_t reply_len,
+    bool is_error
+);
+
+void srr_udp_peer_free(srr_udp_peer_t *peer);
+```
+
