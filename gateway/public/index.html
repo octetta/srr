@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SRR Synthesizer WebAudio Dashboard</title>
+  <style>
+    :root {
+      --bg: #12141a;
+      --card-bg: #1a1d24;
+      --accent: #3b82f6;
+      --accent-glow: rgba(59, 130, 246, 0.4);
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+      --border: #2d333f;
+      --success: #10b981;
+      --danger: #ef4444;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: var(--bg); color: var(--text); padding: 24px; min-height: 100vh; display: flex; flex-direction: column; align-items: center; }
+    .container { width: 100%; max-width: 900px; display: flex; flex-direction: column; gap: 20px; }
+    header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 16px; }
+    h1 { font-size: 1.5rem; font-weight: 700; color: #fff; }
+    .status-badge { display: flex; align-items: center; gap: 8px; font-size: 0.875rem; padding: 6px 12px; border-radius: 9999px; background: rgba(16, 185, 129, 0.1); color: var(--success); border: 1px solid rgba(16, 185, 129, 0.2); }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+    .disconnected { background: rgba(239, 68, 68, 0.1); color: var(--danger); border-color: rgba(239, 68, 68, 0.2); }
+    
+    .panel-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    .panel { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+    .panel h2 { font-size: 1.1rem; color: #e5e7eb; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+
+    .control-group { display: flex; flex-direction: column; gap: 6px; }
+    .control-label { display: flex; justify-content: space-between; font-size: 0.875rem; color: var(--text-muted); }
+    .control-value { font-family: monospace; color: var(--accent); font-weight: 600; }
+    input[type="range"] { width: 100%; accent-color: var(--accent); }
+
+    .btn-row { display: flex; gap: 10px; margin-top: 8px; }
+    button { background: var(--accent); color: white; border: none; padding: 10px 16px; border-radius: 8px; cursor: pointer; font-weight: 600; transition: all 0.2s; }
+    button:hover { background: #2563eb; }
+    button.secondary { background: #374151; }
+    button.secondary:hover { background: #4b5563; }
+
+    /* Keyboard */
+    .keyboard-container { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+    .piano { display: flex; position: relative; height: 160px; user-select: none; justify-content: center; }
+    .key { position: relative; cursor: pointer; border-radius: 0 0 6px 6px; }
+    .key.white { width: 44px; height: 160px; background: #f9fafb; border: 1px solid #d1d5db; border-top: none; z-index: 1; }
+    .key.white.active { background: #93c5fd; }
+    .key.black { width: 28px; height: 100px; background: #1f2937; margin-left: -14px; margin-right: -14px; z-index: 2; border-radius: 0 0 4px 4px; }
+    .key.black.active { background: #3b82f6; }
+    .key-label { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); font-size: 0.75rem; color: #6b7280; }
+
+    /* Telemetry log */
+    .log-panel { background: #0b0d11; border: 1px solid var(--border); border-radius: 8px; padding: 12px; height: 140px; overflow-y: auto; font-family: monospace; font-size: 0.8rem; display: flex; flex-direction: column-reverse; gap: 4px; }
+    .log-entry { display: flex; gap: 8px; }
+    .log-time { color: var(--text-muted); }
+    .log-req { color: var(--accent); }
+    .log-reply { color: var(--success); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div>
+        <h1>SRR Synthesizer WebAudio Dashboard</h1>
+        <p style="color: var(--text-muted); font-size: 0.875rem;">Control plane over SRR Local IPC WebSocket Gateway</p>
+      </div>
+      <div id="statusBadge" class="status-badge disconnected">
+        <span class="status-dot"></span>
+        <span id="statusText">Connecting...</span>
+      </div>
+    </header>
+
+    <div class="panel-grid">
+      <!-- Parameters Panel -->
+      <div class="panel">
+        <h2>Control Plane (SRR Synchronous Send)</h2>
+        <div class="control-group">
+          <div class="control-label">
+            <span>Filter Cutoff</span>
+            <span id="cutoffVal" class="control-value">1200 Hz</span>
+          </div>
+          <input id="cutoffSlider" type="range" min="100" max="8000" step="50" value="1200">
+        </div>
+
+        <div class="control-group">
+          <div class="control-label">
+            <span>Resonance (Q)</span>
+            <span id="resVal" class="control-value">0.70</span>
+          </div>
+          <input id="resSlider" type="range" min="0.1" max="15.0" step="0.1" value="0.7">
+        </div>
+
+        <div class="control-group">
+          <div class="control-label">
+            <span>Master Volume</span>
+            <span id="volVal" class="control-value">0.80</span>
+          </div>
+          <input id="volSlider" type="range" min="0.0" max="1.0" step="0.05" value="0.8">
+        </div>
+
+        <div class="btn-row">
+          <button id="statusBtn" class="secondary">Query Status</button>
+        </div>
+      </div>
+
+      <!-- Pulse & Engine Telemetry -->
+      <div class="panel">
+        <h2>Asynchronous Pulses & Telemetry</h2>
+        <p style="color: var(--text-muted); font-size: 0.875rem;">
+          Pulses send lightweight, non-blocking one-way notifications without waiting for a reply.
+        </p>
+        <div class="btn-row">
+          <button id="tickBtn">Send MIDI Clock Tick (Pulse)</button>
+        </div>
+        <div class="log-panel" id="logPanel">
+          <div class="log-entry" style="color: var(--text-muted);">Awaiting transactions...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Musical Keyboard -->
+    <div class="keyboard-container">
+      <h2>Interactive Keyboard (SRR NOTE_ON / NOTE_OFF)</h2>
+      <div class="piano" id="piano"></div>
+    </div>
+  </div>
+
+  <script>
+    // AudioContext synthesis
+    let audioCtx = null;
+    let masterFilter = null;
+    let masterGain = null;
+    const activeOscs = {};
+
+    function initAudio() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        masterFilter = audioCtx.createBiquadFilter();
+        masterFilter.type = 'lowpass';
+        masterFilter.frequency.value = 1200;
+        masterFilter.Q.value = 0.7;
+
+        masterGain = audioCtx.createGain();
+        masterGain.gain.value = 0.8;
+
+        masterFilter.connect(masterGain);
+        masterGain.connect(audioCtx.destination);
+      }
+    }
+
+    // WebSocket connection to SRR Gateway
+    const ws = new WebSocket(`ws://${window.location.hostname}:8081`);
+    const statusBadge = document.getElementById('statusBadge');
+    const statusText = document.getElementById('statusText');
+    const logPanel = document.getElementById('logPanel');
+
+    ws.onopen = () => {
+      statusBadge.classList.remove('disconnected');
+      statusText.textContent = "Connected to SRR Gateway";
+      addLog("GATEWAY", "Connected to SRR synth service");
+      sendSRR("STATUS");
+    };
+
+    ws.onclose = () => {
+      statusBadge.classList.add('disconnected');
+      statusText.textContent = "Disconnected";
+      addLog("GATEWAY", "Connection closed");
+    };
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.status === "OK" && data.reply) {
+        addLog("REPLY", data.reply);
+      }
+    };
+
+    function sendSRR(cmd) {
+      if (ws.readyState === WebSocket.OPEN) {
+        addLog("SEND", cmd);
+        ws.send(JSON.stringify({ action: "send", cmd: cmd }));
+      }
+    }
+
+    function sendPulse(code, val) {
+      if (ws.readyState === WebSocket.OPEN) {
+        addLog("PULSE", `code=${code} val=${val}`);
+        ws.send(JSON.stringify({ action: "pulse", code: code, val: val }));
+      }
+    }
+
+    function addLog(type, text) {
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      const time = new Date().toLocaleTimeString();
+      entry.innerHTML = `<span class="log-time">[${time}]</span> <span class="${type === 'REPLY' ? 'log-reply' : 'log-req'}">${type}:</span> <span>${text}</span>`;
+      logPanel.prepend(entry);
+    }
+
+    // Slider Listeners
+    const cutoffSlider = document.getElementById('cutoffSlider');
+    const cutoffVal = document.getElementById('cutoffVal');
+    cutoffSlider.oninput = (e) => {
+      initAudio();
+      const val = parseFloat(e.target.value);
+      cutoffVal.textContent = `${val} Hz`;
+      if (masterFilter) masterFilter.frequency.setValueAtTime(val, audioCtx.currentTime);
+      sendSRR(`SET cutoff ${val}`);
+    };
+
+    const resSlider = document.getElementById('resSlider');
+    const resVal = document.getElementById('resVal');
+    resSlider.oninput = (e) => {
+      initAudio();
+      const val = parseFloat(e.target.value);
+      resVal.textContent = val.toFixed(2);
+      if (masterFilter) masterFilter.Q.setValueAtTime(val, audioCtx.currentTime);
+      sendSRR(`SET resonance ${val}`);
+    };
+
+    const volSlider = document.getElementById('volSlider');
+    const volVal = document.getElementById('volVal');
+    volSlider.oninput = (e) => {
+      initAudio();
+      const val = parseFloat(e.target.value);
+      volVal.textContent = val.toFixed(2);
+      if (masterGain) masterGain.gain.setValueAtTime(val, audioCtx.currentTime);
+      sendSRR(`SET volume ${val}`);
+    };
+
+    document.getElementById('statusBtn').onclick = () => sendSRR("STATUS");
+    document.getElementById('tickBtn').onclick = () => sendPulse(1, 1);
+
+    // Keyboard Generation (C3 to B4: MIDI 48 to 71)
+    const piano = document.getElementById('piano');
+    const notes = [
+      { n: 48, name: "C3", b: false }, { n: 49, name: "C#3", b: true },
+      { n: 50, name: "D3", b: false }, { n: 51, name: "D#3", b: true },
+      { n: 52, name: "E3", b: false }, { n: 53, name: "F3", b: false },
+      { n: 54, name: "F#3", b: true }, { n: 55, name: "G3", b: false },
+      { n: 56, name: "G#3", b: true }, { n: 57, name: "A3", b: false },
+      { n: 58, name: "A#3", b: true }, { n: 59, name: "B3", b: false },
+      { n: 60, name: "C4", b: false }, { n: 61, name: "C#4", b: true },
+      { n: 62, name: "D4", b: false }, { n: 63, name: "D#4", b: true },
+      { n: 64, name: "E4", b: false }, { n: 65, name: "F4", b: false },
+      { n: 66, name: "F#4", b: true }, { n: 67, name: "G4", b: false },
+      { n: 68, name: "G#4", b: true }, { n: 69, name: "A4", b: false },
+      { n: 70, name: "A#4", b: true }, { n: 71, name: "B4", b: false },
+    ];
+
+    function midiToFreq(m) { return 440 * Math.pow(2, (m - 69) / 12); }
+
+    function startNote(note) {
+      initAudio();
+      if (activeOscs[note]) return;
+      const osc = audioCtx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(midiToFreq(note), audioCtx.currentTime);
+      osc.connect(masterFilter);
+      osc.start();
+      activeOscs[note] = osc;
+
+      sendSRR(`NOTE_ON ${note} 100`);
+    }
+
+    function stopNote(note) {
+      if (activeOscs[note]) {
+        activeOscs[note].stop();
+        activeOscs[note].disconnect();
+        delete activeOscs[note];
+        sendSRR(`NOTE_OFF ${note}`);
+      }
+    }
+
+    notes.forEach(noteObj => {
+      const key = document.createElement('div');
+      key.className = `key ${noteObj.b ? 'black' : 'white'}`;
+      if (!noteObj.b) {
+        const lbl = document.createElement('div');
+        lbl.className = 'key-label';
+        lbl.textContent = noteObj.name;
+        key.appendChild(lbl);
+      }
+
+      key.onmousedown = () => { key.classList.add('active'); startNote(noteObj.n); };
+      key.onmouseup = () => { key.classList.remove('active'); stopNote(noteObj.n); };
+      key.onmouseleave = () => { if (key.classList.contains('active')) { key.classList.remove('active'); stopNote(noteObj.n); } };
+
+      piano.appendChild(key);
+    });
+  </script>
+</body>
+</html>
