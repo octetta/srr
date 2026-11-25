@@ -1,6 +1,53 @@
 # SRR: Synchronous Message Passing for Portable Concurrent Systems
 
-SRR provides a synchronous **Send / Receive / Reply** service communication model for C99 programs, operating uniformly across in-process threads, local inter-process communication (IPC), serial links, and resource-constrained microcontrollers.
+> **The missing interaction primitive for systems developers:** The exact same Send / Receive / Reply model whether you are passing commands across threads, local OS processes, or a serial wire to an 8-bit microcontroller.
+
+---
+
+## Why SRR? The Problem with Standard IPC
+
+Every systems engineer eventually encounters the same fragmented nightmare when building real-world concurrent or embedded systems:
+
+1. **Raw OS IPC (Unix Sockets, Pipes, FIFOs) is low-level and brittle:**
+   - They are **unframed byte streams**. You must write manual length-prefix framing, delimiter parsing, and partial `read()`/`write()` loops just to get a message through safely.
+   - They have **no built-in request/reply correlation**. If multiple threads or requests share a descriptor, responses get interleaved.
+   - **Timeout races cause silent data corruption:** If your client times out waiting for a reply, the server's delayed response stays in the socket buffer. Your next request's `read()` receives the *stale reply from the previous transaction*.
+   - Windows Named Pipes and Unix Sockets share zero API commonality, forcing dual implementations for cross-platform software.
+
+2. **Heavyweight RPC (gRPC, ZeroMQ, MQTT) cannot go where you need them:**
+   - **gRPC** requires HTTP/2, C++, OpenSSL, and megabytes of runtime footprint. It cannot run on microcontrollers like an RP2040 Pico or an ESP32, let alone an 8-bit AVR with 2 KB of total RAM.
+   - **ZeroMQ** is fast on Linux, but its REQ/REP state machine notoriously locks into unrecoverable EFSM states if you send out-of-order, relies on dynamic heap allocation, and has zero bare-metal embedded support.
+   - **MQTT / Message Brokers** require running an external daemon and add 10–50 ms of network broker hops to tasks that should take microseconds.
+
+3. **Microcontrollers are forced into custom ad-hoc protocols:**
+   - Every microcontroller project invents its own fragile binary packet structure over UART or SPI. Host software then needs custom parsers, separate timeout handling, and brittle glue code.
+
+---
+
+## The SRR Solution: One Contract from Threads to Silicon
+
+Inspired by the proven microkernel message-passing architecture of QNX, SRR modernizes Send / Receive / Reply into a standalone, portable C99 library:
+
+* **Symmetric Mental Model:** Call `srr_send()` from a C thread, a Python script, or an Erlang actor; answer with `srr_reply()` from a background Linux daemon or a cooperative loop on an Arduino. The semantics, framing, and error codes are identical.
+* **Deterministic Single-Winner State Machine:** A transaction completes exactly once. If a timeout fires, any subsequent late reply is discarded cleanly—it will never corrupt future transactions. Disconnections immediately unblock pending callers without deadlocks.
+* **Zero Heap on Bare Metal:** The embedded profiles operate entirely on statically allocated memory buffers. The AVR profile requires just **335 bytes of RAM** and **1.8 KB of code**, running directly on an ATmega328P.
+* **Microsecond Speed:** **6.7 µs** in-process latency (446,000 ops/s multi-threaded), **17 µs** over Unix Domain Sockets, and **40 nanosecond** queue-full rejections.
+
+---
+
+## SRR vs Alternatives at a Glance
+
+| Feature | Raw Unix Sockets / Pipes | POSIX Queues (`mq`) | ZeroMQ (REQ/REP) | gRPC | **SRR (Send/Receive/Reply)** |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Message Framing** | ❌ Raw byte stream | ✅ Discrete messages | ✅ Framed messages | ✅ HTTP/2 Framed | **✅ Built-in COBS & Header** |
+| **Request-Reply Correlation** | ❌ Manual ID tracking | ❌ None (FIFO queue) | ⚠️ Strict lock-step | ✅ Stream multiplexing | **✅ Automatic Transaction IDs** |
+| **Timeout Stale-Reply Safety** | ❌ Leaves stale data in buffer | ❌ N/A (unidirectional) | ❌ Socket enters broken state | ✅ Stream cancellation | **✅ Atomic single-winner discard** |
+| **Runs on Bare-Metal Microcontrollers** | ❌ OS only | ❌ OS only | ❌ No (requires OS & heap)| ❌ No (massive footprint) | **✅ Yes (Zero heap, 335B RAM)** |
+| **Memory Allocation** | Kernel buffers | Kernel buffers | Dynamic (`malloc`) | Heavy dynamic heap | **Zero-Heap Profiles available** |
+| **In-Process Thread Transport** | ❌ Socket overhead | ❌ High syscall overhead | ⚠️ `inproc://` (heap heavy) | ❌ Inefficient | **✅ Pointer exchange (6.7 µs)** |
+| **Cross-Platform Host Support** | ❌ Unix only (Pipes differ) | ❌ Linux/POSIX only | ✅ Windows/Unix | ✅ Windows/Unix | **✅ Linux, macOS, Windows, Bare Metal** |
+| **Telemetry / One-Way Events** | ❌ Ad-hoc packet | ⚠️ Priority write | ⚠️ PUB/SUB socket | ⚠️ Unary RPC | **✅ Native `srr_pulse()` (4B code, 8B val)** |
+| **Binary Footprint** | System libc | System libc | ~2.5 MB | ~15+ MB | **~18 KB (Host) / ~1.8 KB (AVR)** |
 
 ---
 
