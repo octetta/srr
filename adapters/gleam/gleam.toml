@@ -1,0 +1,9 @@
+name = "srr"
+version = "0.1.0"
+description = "Type-safe Gleam client and wire framing for SRR (Synchronous Send / Receive / Reply) on the BEAM"
+
+[dependencies]
+gleam_stdlib = ">= 0.34.0 and < 2.0.0"
+
+[dev-dependencies]
+gleeunit = ">= 1.0.0 and < 2.0.0"
