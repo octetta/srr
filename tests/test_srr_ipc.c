@@ -88,10 +88,6 @@ void test_ipc_roundtrip(void) {
 
 void test_forked_process_ipc(void) {
     printf("[TEST] Cross-process IPC via fork()... ");
-#if defined(__SANITIZE_THREAD__) || (defined(__has_feature) && __has_feature(thread_sanitizer))
-    printf("[SKIP: fork() without exec() after threads is not supported by ThreadSanitizer runtime]\n");
-    return;
-#endif
     const char *svc_name = "test_srr_fork_svc";
 
     pid_t pid = fork();

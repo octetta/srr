@@ -234,8 +234,10 @@ static void *ipc_client_session_thread(void *arg) {
 
 static void *ipc_listener_thread(void *arg) {
     srr_channel_t *chan = (srr_channel_t *)arg;
+    pthread_mutex_lock(&chan->lock);
     int listen_fd = (int)chan->ipc_listen_handle;
     int pipe_rd = chan->ipc_shutdown_pipe[0];
+    pthread_mutex_unlock(&chan->lock);
 
     struct pollfd pfds[2];
     pfds[0].fd = listen_fd;
@@ -400,8 +402,10 @@ void srr_ipc_server_stop(srr_channel_t *channel) {
     pthread_join(channel->ipc_listen_th, NULL);
 
     /* Close listen descriptor and shutdown pipe read end after listener thread is joined */
+    pthread_mutex_lock(&channel->lock);
     int fd = (int)channel->ipc_listen_handle;
     channel->ipc_listen_handle = -1;
+    pthread_mutex_unlock(&channel->lock);
     if (fd >= 0) {
         close(fd);
     }

@@ -167,21 +167,30 @@ test: $(LIB) $(TEST_BINS)
 
 test-asan:
 	@echo "--- Building and Running with AddressSanitizer & UndefinedBehaviorSanitizer ---"
-	$(MAKE) clean
-	$(MAKE) CC="$(CC)" CFLAGS="$(CFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer -g" test
-	$(MAKE) clean
+	@$(MAKE) clean
+	@set +e; \
+	$(MAKE) CC="$(CC)" CFLAGS="$(CFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer -g" test; \
+	rc=$$?; \
+	$(MAKE) clean; \
+	exit $$rc
 
 test-tsan:
 	@echo "--- Building and Running with ThreadSanitizer ---"
-	$(MAKE) clean
-	$(MAKE) CC="$(CC)" CFLAGS="$(CFLAGS) -fsanitize=thread -fno-omit-frame-pointer -g" test
-	$(MAKE) clean
+	@$(MAKE) clean
+	@set +e; \
+	$(MAKE) CC="$(CC)" CFLAGS="$(CFLAGS) -fsanitize=thread -fno-omit-frame-pointer -g" test; \
+	rc=$$?; \
+	$(MAKE) clean; \
+	exit $$rc
 
 test-ubsan:
 	@echo "--- Building and Running with UndefinedBehaviorSanitizer ---"
-	$(MAKE) clean
-	$(MAKE) CC="$(CC)" CFLAGS="$(CFLAGS) -fsanitize=undefined -fno-omit-frame-pointer -g" test
-	$(MAKE) clean
+	@$(MAKE) clean
+	@set +e; \
+	$(MAKE) CC="$(CC)" CFLAGS="$(CFLAGS) -fsanitize=undefined -fno-omit-frame-pointer -g" test; \
+	rc=$$?; \
+	$(MAKE) clean; \
+	exit $$rc
 
 test-conformance: $(LIB)
 	@echo "--- Running Protocol Conformance Test Vectors ---"
