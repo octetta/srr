@@ -33,8 +33,10 @@ static void print_usage(const char *prog) {
     printf("  register <name> <transport> <target> [baud] [svc_id] [ttl] Register service with resolver\n");
     printf("  unregister <name>        Remove service from resolver\n");
     printf("  list-services            List all registered services from resolver\n");
+    printf("  serve --exec <cmd>       Run an SRR server executing script/command per request\n");
     printf("  help                     Display this help reference\n\n");
     printf("Examples:\n");
+    printf("  %s --ipc my_service serve --exec ./my_handler.sh\n", prog);
     printf("  %s resolve temp-sensor\n", prog);
     printf("  %s register temp-sensor SERIAL /dev/ttyACM0 115200 4097 0\n", prog);
     printf("  %s --sim info\n", prog);
@@ -181,6 +183,146 @@ int main(int argc, char **argv) {
             return 0;
         } else {
             fprintf(stderr, "Error listing services: %s\n", srr_status_str(st));
+            return 1;
+        }
+    }
+
+    /* Serve subcommand: runs an SRR server and delegates request handling to a script */
+    if (strcmp(subcmd, "serve") == 0) {
+        const char *exec_cmd = NULL;
+        for (int i = cmd_idx + 1; i < argc; i++) {
+            if (strcmp(argv[i], "--exec") == 0 && i + 1 < argc) {
+                exec_cmd = argv[++i];
+            }
+        }
+        if (!exec_cmd) {
+            fprintf(stderr, "Error: 'serve' requires --exec <command_or_script>\n");
+            fprintf(stderr, "Usage: %s --ipc <name> serve --exec <script>\n", argv[0]);
+            fprintf(stderr, "       %s --udp <port> serve --exec <script>\n", argv[0]);
+            return 1;
+        }
+
+        if (ipc_name) {
+            srr_channel_t *chan = NULL;
+            srr_status_t st = srr_channel_create_service(ipc_name, NULL, &chan);
+            if (st != SRR_OK) {
+                fprintf(stderr, "Error: Failed to create IPC service '%s': %s\n", ipc_name, srr_status_str(st));
+                return 1;
+            }
+            printf("SRR Service listening on IPC '%s' (exec: %s)\n", ipc_name, exec_cmd);
+            fflush(stdout);
+            while (1) {
+                srr_request_t *req = NULL;
+                st = srr_receive(chan, &req);
+                if (st != SRR_OK || !req) break;
+
+                if (srr_request_is_pulse(req)) {
+                    srr_request_dispose(req);
+                    continue;
+                }
+
+                const char *req_data = (const char *)srr_request_data(req);
+                size_t req_sz = srr_request_size(req);
+
+                int in_pipe[2], out_pipe[2];
+                if (pipe(in_pipe) != 0 || pipe(out_pipe) != 0) {
+                    srr_reply(req, "ERR pipe_failed", 16);
+                    continue;
+                }
+
+                pid_t pid = fork();
+                if (pid == 0) {
+                    close(in_pipe[1]);
+                    close(out_pipe[0]);
+                    dup2(in_pipe[0], STDIN_FILENO);
+                    dup2(out_pipe[1], STDOUT_FILENO);
+                    close(in_pipe[0]);
+                    close(out_pipe[1]);
+                    execl("/bin/sh", "sh", "-c", exec_cmd, (char *)NULL);
+                    _exit(127);
+                }
+
+                close(in_pipe[0]);
+                close(out_pipe[1]);
+                if (req_sz > 0 && req_data) {
+                    ssize_t w = write(in_pipe[1], req_data, req_sz);
+                    (void)w;
+                }
+                close(in_pipe[1]);
+
+                char reply_buf[8192] = {0};
+                ssize_t n = read(out_pipe[0], reply_buf, sizeof(reply_buf) - 1);
+                close(out_pipe[0]);
+                waitpid(pid, NULL, 0);
+
+                if (n < 0) n = 0;
+                reply_buf[n] = '\0';
+                if (n > 0 && reply_buf[n - 1] == '\n') {
+                    reply_buf[--n] = '\0';
+                }
+
+                srr_reply(req, reply_buf, (size_t)n + 1);
+            }
+            srr_channel_destroy(chan);
+            return 0;
+        } else if (udp_target) {
+            uint16_t port = (uint16_t)atoi(udp_target);
+            if (port == 0) port = SRR_UDP_DEFAULT_PORT;
+            srr_udp_config_t cfg;
+            srr_udp_default_config(&cfg);
+            srr_udp_endpoint_t *server = srr_udp_server_create(port, &cfg);
+            if (!server) {
+                fprintf(stderr, "Error: Could not bind UDP server on port %u\n", port);
+                return 1;
+            }
+            printf("SRR Service listening on UDP port %u (exec: %s)\n", port, exec_cmd);
+            fflush(stdout);
+            while (1) {
+                srr_wire_header_t hdr;
+                uint8_t payload[4096] = {0};
+                size_t actual_len = 0;
+                srr_udp_peer_t *peer = NULL;
+                int rc = srr_udp_server_receive(server, &hdr, payload, sizeof(payload) - 1, &actual_len, &peer, 1000);
+                if (rc == 0 && peer) {
+                    int in_pipe[2], out_pipe[2];
+                    if (pipe(in_pipe) != 0 || pipe(out_pipe) != 0) {
+                        srr_udp_peer_free(peer);
+                        continue;
+                    }
+                    pid_t pid = fork();
+                    if (pid == 0) {
+                        close(in_pipe[1]); close(out_pipe[0]);
+                        dup2(in_pipe[0], STDIN_FILENO);
+                        dup2(out_pipe[1], STDOUT_FILENO);
+                        close(in_pipe[0]); close(out_pipe[1]);
+                        execl("/bin/sh", "sh", "-c", exec_cmd, (char *)NULL);
+                        _exit(127);
+                    }
+                    close(in_pipe[0]); close(out_pipe[1]);
+                    if (actual_len > 0) {
+                        ssize_t w = write(in_pipe[1], payload, actual_len);
+                        (void)w;
+                    }
+                    close(in_pipe[1]);
+
+                    char reply_buf[8192] = {0};
+                    ssize_t n = read(out_pipe[0], reply_buf, sizeof(reply_buf) - 1);
+                    close(out_pipe[0]);
+                    waitpid(pid, NULL, 0);
+
+                    if (n < 0) n = 0;
+                    reply_buf[n] = '\0';
+                    if (n > 0 && reply_buf[n - 1] == '\n') reply_buf[--n] = '\0';
+
+                    srr_udp_server_reply(server, peer, hdr.trans_id, hdr.service_id, hdr.operation_id,
+                                         reply_buf, (size_t)n + 1, false);
+                    srr_udp_peer_free(peer);
+                }
+            }
+            srr_udp_close(server);
+            return 0;
+        } else {
+            fprintf(stderr, "Error: 'serve' requires either --ipc <name> or --udp <port>\n");
             return 1;
         }
     }

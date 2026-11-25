@@ -119,3 +119,143 @@ include examples/scripting/srr_client.fs
 srr-ping
 srr-query
 ```
+
+---
+
+## 7. Scripting Languages as SRR Servers
+
+Beyond acting as clients, **scripting languages can act as full-fledged SRR services** that answer synchronous requests from C applications, Erlang nodes, WebAudio UIs, and microcontrollers.
+
+There are two primary patterns for building scripting servers:
+1. **The Piped Bridge (`srr_cli serve --exec <script>`)**: The "inetd / CGI" model.
+2. **Native Socket Listeners**: Direct binary framing in languages with socket APIs (Python, Perl, PHP, Node.js).
+
+---
+
+### Pattern 1: The Piped Bridge (`srr_cli serve`)
+
+In this architecture, `tools/srr_cli` manages all the heavy C mechanics: binding the IPC socket (or UDP port), enforcing single-winner timeouts, handling queue backpressure (`SRR_QUEUE_FULL`), and serializing the binary 24-byte headers. 
+
+When a transaction arrives, `srr_cli` feeds the request payload into the script via `stdin` and captures the script's `stdout` as the synchronous `srr_reply()`:
+
+```text
+  [Client (C / Erlang / MCU)]
+              |
+              | Synchronous srr_send()
+              v
+  +-------------------------------------------------------+
+  | tools/srr_cli --ipc sysmon serve --exec ./server.sh   |
+  |  - Binds /tmp/srr_sysmon.sock                         |
+  |  - Single-winner transaction state machine            |
+  |  - Bounded queue & timeout protection                 |
+  +-------------------------------------------------------+
+              | stdin (payload)       ^ stdout (reply)
+              v                       |
+  +-------------------------------------------------------+
+  | Script Handler (Bash, Python, Perl, Ruby, Node, etc.) |
+  +-------------------------------------------------------+
+```
+
+#### Bash Example ([`examples/scripting/shell_server.sh`](../examples/scripting/shell_server.sh))
+```bash
+#!/usr/bin/env bash
+read -r REQUEST
+case "$REQUEST" in
+    "PING")  echo "PONG from Bash SRR Server!" ;;
+    "DISK")  df -h / | awk 'NR==2 {print $4}' ;;
+    *)       echo "ERR_UNKNOWN: $REQUEST" ;;
+esac
+```
+Run as service:
+```bash
+./tools/srr_cli --ipc sysmon serve --exec ./examples/scripting/shell_server.sh
+```
+
+#### Python Handler (`server.py`)
+```python
+#!/usr/bin/env python3
+import sys, json
+
+payload = sys.stdin.read().strip()
+if payload == "STATS":
+    response = {"status": "ok", "cores": 8, "memory_free_mb": 4096}
+else:
+    response = {"error": "unsupported_command"}
+
+sys.stdout.write(json.dumps(response))
+```
+
+#### Perl Handler (`server.pl`)
+```perl
+#!/usr/bin/env perl
+use strict;
+my $req = <STDIN>;
+chomp($req);
+print "PERL_ECHO:$req";
+```
+
+#### PHP Handler (`server.php`)
+```php
+#!/usr/bin/env php
+<?php
+$req = trim(file_get_contents("php://stdin"));
+echo "PHP_PROCESSED:" . strtoupper($req);
+```
+
+#### Node.js Handler (`server.js`)
+```javascript
+#!/usr/bin/env node
+const fs = require('fs');
+const req = fs.readFileSync(0, 'utf-8').trim();
+process.stdout.write(`NODE_ACK:${req.length}_bytes`);
+```
+
+---
+
+### Pattern 2: Native Script Sockets (Persistent In-Memory State)
+
+If a scripting service needs persistent state across requests (e.g., an in-memory cache, active machine learning model, or long-lived database connection), the script can bind the Unix Domain Socket directly using the standard 24-byte binary IPC format.
+
+#### Native Python SRR Server Example
+```python
+import socket, struct
+
+SRR_MAGIC = 0x53525231
+SRR_VERSION = 1
+SRR_MSG_REQUEST = 2
+SRR_MSG_REPLY = 3
+
+server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+server.bind("/tmp/srr_py_service.sock")
+server.listen(16)
+
+state_counter = 0
+
+while True:
+    conn, _ = server.accept()
+    # Read 24-byte header
+    hdr = conn.recv(24)
+    magic, ver, msg_type, flags, tid, plen = struct.unpack("<IHHIQI", hdr)
+    req_body = conn.recv(plen).decode('utf-8')
+
+    state_counter += 1
+    reply_body = f"COUNT={state_counter} RECEIVED={req_body}".encode('utf-8')
+
+    # Send 24-byte reply header + payload
+    rep_hdr = struct.pack("<IHHIQI", SRR_MAGIC, SRR_VERSION, SRR_MSG_REPLY, 0, tid, len(reply_body))
+    conn.sendall(rep_hdr + reply_body)
+    conn.close()
+```
+
+---
+
+### Comparison of Scripting Server Approaches
+
+| Feature | Piped Bridge (`srr_cli serve`) | Native Script Sockets |
+|---|---|---|
+| **Scripting Languages Supported** | **Any** (Bash, Python, Perl, Tcl, PHP, Ruby, Node, Awk, Jq) | Only languages with binary socket APIs |
+| **Concurrency & Single-Winner** | Handled completely by C runtime | Script must handle threading & signals |
+| **Crash Protection** | Script crash returns cleanly with exit code | Script crash kills the socket |
+| **State Persistence** | Stateless per-request (or writes to disk/DB) | Stateful in-memory process |
+| **Implementation Complexity** | **Zero socket code** in the script | Requires struct packing/unpacking loop |
+

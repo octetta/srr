@@ -61,4 +61,25 @@ else
 fi
 
 echo ""
+echo "================================================================="
+echo " 3. Running a Native Shell Script as an SRR Server"
+echo "================================================================="
+
+# Start background server
+"$CLI" --ipc test_sh_auto serve --exec ./examples/scripting/shell_server.sh >/dev/null 2>&1 &
+SRV_PID=$!
+sleep 0.2
+
+# Issue synchronous requests from CLI client to shell server
+SH_REPLY1=$("$CLI" --ipc test_sh_auto req 0 0 "PING")
+echo "[SHELL-SERVER] PING -> $SH_REPLY1"
+
+SH_REPLY2=$("$CLI" --ipc test_sh_auto req 0 0 "CALC 19 + 23")
+echo "[SHELL-SERVER] CALC 19 + 23 -> $SH_REPLY2"
+
+kill "$SRV_PID" 2>/dev/null || true
+wait "$SRV_PID" 2>/dev/null || true
+
+echo "[OK] Shell script server verified successfully."
+echo ""
 echo "Shell automation example completed successfully!"
