@@ -59,10 +59,16 @@ struct srr_request {
     intptr_t           ipc_client_handle;
     uint64_t           ipc_trans_id;
     pthread_mutex_t   *ipc_client_lock; /* serializes writes to client handle */
+    void              *ipc_session;     /* ref-counted ipc_client_session_t */
 
     /* Queue linkage */
     struct srr_request *next;
 };
+
+typedef struct ipc_client_session ipc_client_session_t;
+#ifndef _WIN32
+void srr_ipc_session_release(ipc_client_session_t *sess);
+#endif
 
 typedef enum {
     SRR_CHAN_OPEN = 0,

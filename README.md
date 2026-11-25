@@ -11,7 +11,7 @@ SRR provides a synchronous **Send / Receive / Reply** service communication mode
 - **Three-Tier Architecture:** Complete separation between transaction state logic, wire framing/serialization, and platform execution backends.
 - **Zero-Heap Embedded Profiles:** Dedicated profiles for microcontrollers (RP2040 Pico, AVR ATmega328P, ESP32, and Parallax Propeller P1) operating entirely on caller-provided static buffers without dynamic heap allocation.
 - **Empirical Performance:** Median round-trip latency of **6.7 µs** in-process, up to **446,000 transactions/sec** on multi-threaded workloads, and **2.78 Million frames/sec** COBS framing throughput.
-- **Zero Leaks & Race-Free:** 100% verified across 11 test suites under Valgrind with zero memory leaks and zero errors.
+- **Zero Leaks & Race-Free:** 100% verified across 12 test suites under Valgrind with zero memory leaks and zero errors.
 
 ---
 
@@ -205,10 +205,10 @@ SRR includes a developer CLI for querying, benchmarking, and interacting with en
 # Build static library libsrr.a, examples, CLI tools, and BEAM port driver
 make all
 
-# Run all 11 native unit and integration test suites
+# Run all 12 native unit and integration test suites
 make test
 
-# Run all 11 test suites under Valgrind (0 errors, 0 memory leaks check)
+# Run all 12 test suites under Valgrind (0 errors, 0 memory leaks check)
 make test-valgrind
 
 # Run BEAM (Erlang, Elixir, Gleam) integration tests

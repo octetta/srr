@@ -67,6 +67,12 @@ void srr_request_release(srr_request_t *req) {
             free(req->req_data);
             req->req_data = NULL;
         }
+#ifndef _WIN32
+        if (req->backend == SRR_BACKEND_IPC && req->ipc_session) {
+            srr_ipc_session_release((ipc_client_session_t *)req->ipc_session);
+            req->ipc_session = NULL;
+        }
+#endif
         free(req);
     }
 }

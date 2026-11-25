@@ -387,3 +387,44 @@ int srr_udp_server_reply(
 void srr_udp_peer_free(srr_udp_peer_t *peer);
 ```
 
+---
+
+## 9. Service & Device Resolver API (`include/srr/srr_resolver.h`)
+
+Provides dynamic service registration, on-behalf-of embedded serial device proxies, and client endpoint resolution across IPC, Serial, and UDP transports.
+
+### Resolver Engine Lifecycle
+```c
+srr_resolver_t* srr_resolver_create(void);
+void            srr_resolver_destroy(srr_resolver_t *res);
+int             srr_resolver_register(srr_resolver_t *res, const srr_endpoint_entry_t *entry);
+int             srr_resolver_unregister(srr_resolver_t *res, const char *service_name);
+int             srr_resolver_lookup(srr_resolver_t *res, const char *service_name, srr_endpoint_entry_t *out_entry);
+int             srr_resolver_heartbeat(srr_resolver_t *res, const char *service_name);
+int             srr_resolver_list(srr_resolver_t *res, srr_endpoint_entry_t *out_entries, size_t max_entries, size_t *out_count);
+void            srr_resolver_prune_expired(srr_resolver_t *res, uint64_t now_ms);
+int             srr_resolver_handle_request(srr_resolver_t *res, const char *req, char *rep, size_t rep_cap);
+```
+
+### Client Resolution & Registration
+```c
+srr_status_t srr_resolve(
+    const char *resolver_service,
+    const char *service_name,
+    srr_endpoint_entry_t *out_entry,
+    uint32_t timeout_ms
+);
+
+srr_status_t srr_register_service(
+    const char *resolver_service,
+    const srr_endpoint_entry_t *entry,
+    uint32_t timeout_ms
+);
+
+srr_status_t srr_unregister_service(
+    const char *resolver_service,
+    const char *service_name,
+    uint32_t timeout_ms
+);
+```
+

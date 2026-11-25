@@ -75,11 +75,30 @@ int srr_ipc_read_all(intptr_t handle, void *buf, size_t len, int timeout_ms) {
     return 0;
 }
 
-typedef struct {
+struct ipc_client_session {
     srr_channel_t   *channel;
     int              client_fd;
     pthread_mutex_t  client_write_lock;
-} ipc_client_session_t;
+    pthread_mutex_t  ref_lock;
+    int              ref_count;
+};
+
+void srr_ipc_session_release(ipc_client_session_t *sess) {
+    if (!sess) return;
+    pthread_mutex_lock(&sess->ref_lock);
+    sess->ref_count--;
+    int count = sess->ref_count;
+    pthread_mutex_unlock(&sess->ref_lock);
+    if (count <= 0) {
+        if (sess->client_fd >= 0) {
+            close(sess->client_fd);
+            sess->client_fd = -1;
+        }
+        pthread_mutex_destroy(&sess->client_write_lock);
+        pthread_mutex_destroy(&sess->ref_lock);
+        free(sess);
+    }
+}
 
 static void *ipc_client_session_thread(void *arg) {
     ipc_client_session_t *sess = (ipc_client_session_t *)arg;
@@ -162,6 +181,11 @@ static void *ipc_client_session_thread(void *arg) {
                 break;
             }
 
+            pthread_mutex_lock(&sess->ref_lock);
+            sess->ref_count++;
+            pthread_mutex_unlock(&sess->ref_lock);
+
+            req->ipc_session = sess;
             req->req_data = req_data;
             req->req_size = hdr.payload_len;
             req->ipc_client_handle = (intptr_t)fd;
@@ -207,10 +231,8 @@ static void *ipc_client_session_thread(void *arg) {
         }
     }
 
-    close(fd);
-    pthread_mutex_destroy(&sess->client_write_lock);
     srr_channel_release(sess->channel);
-    free(sess);
+    srr_ipc_session_release(sess);
     return NULL;
 }
 
@@ -241,12 +263,16 @@ static void *ipc_listener_thread(void *arg) {
         }
         sess->channel = chan;
         sess->client_fd = client_fd;
+        sess->ref_count = 1;
+        pthread_mutex_init(&sess->ref_lock, NULL);
         pthread_mutex_init(&sess->client_write_lock, NULL);
 
         ipc_client_node_t *node = (ipc_client_node_t *)malloc(sizeof(ipc_client_node_t));
         if (!node) {
             close(client_fd);
+            sess->client_fd = -1;
             pthread_mutex_destroy(&sess->client_write_lock);
+            pthread_mutex_destroy(&sess->ref_lock);
             free(sess);
             srr_channel_release(chan);
             continue;

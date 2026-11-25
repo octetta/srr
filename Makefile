@@ -9,11 +9,11 @@ AR      ?= ar
 WIN_CC  ?= x86_64-w64-mingw32-gcc
 WIN_AR  ?= x86_64-w64-mingw32-ar
 
-SRC     := src/srr_pthread.c src/srr_ipc.c src/srr_wire.c src/srr_serial.c src/srr_embedded.c src/srr_tiny.c src/srr_esp32.c src/srr_p1.c src/srr_udp.c
+SRC     := src/srr_pthread.c src/srr_ipc.c src/srr_wire.c src/srr_serial.c src/srr_embedded.c src/srr_tiny.c src/srr_esp32.c src/srr_p1.c src/srr_udp.c src/srr_resolver.c
 OBJ     := $(SRC:.c=.o)
 LIB     := libsrr.a
 
-TEST_SRCS := tests/test_srr_basic.c tests/test_srr_races.c tests/test_srr_stress.c tests/test_srr_ipc.c tests/test_srr_wire.c tests/test_srr_embedded.c tests/test_srr_serial.c tests/test_srr_tiny.c tests/test_srr_esp32.c tests/test_srr_p1.c tests/test_srr_udp.c
+TEST_SRCS := tests/test_srr_basic.c tests/test_srr_races.c tests/test_srr_stress.c tests/test_srr_ipc.c tests/test_srr_wire.c tests/test_srr_embedded.c tests/test_srr_serial.c tests/test_srr_tiny.c tests/test_srr_esp32.c tests/test_srr_p1.c tests/test_srr_udp.c tests/test_srr_resolver.c
 TEST_BINS := $(TEST_SRCS:.c=)
 
 # Default target displays help
@@ -77,6 +77,7 @@ examples: $(LIB)
 
 tools: $(LIB)
 	$(CC) $(CFLAGS) tools/srr_cli.c -L. -lsrr -o tools/srr_cli
+	$(CC) $(CFLAGS) tools/srr_resolver.c -L. -lsrr -o tools/srr_resolver
 
 beam: $(LIB)
 	$(CC) $(CFLAGS) adapters/beam/src/srr_port_driver.c -L. -lsrr -o adapters/beam/srr_port_driver
@@ -124,6 +125,7 @@ test: $(LIB) $(TEST_BINS)
 	./tests/test_srr_esp32
 	./tests/test_srr_p1
 	./tests/test_srr_udp
+	./tests/test_srr_resolver
 	@echo "All native tests passed!"
 
 test-valgrind: $(LIB) $(TEST_BINS)
@@ -139,6 +141,7 @@ test-valgrind: $(LIB) $(TEST_BINS)
 	valgrind --leak-check=full --error-exitcode=1 ./tests/test_srr_esp32
 	valgrind --leak-check=full --error-exitcode=1 ./tests/test_srr_p1
 	valgrind --leak-check=full --error-exitcode=1 ./tests/test_srr_udp
+	valgrind --leak-check=full --error-exitcode=1 ./tests/test_srr_resolver
 	@echo "All Valgrind checks passed with 0 errors and 0 leaks!"
 
 test-beam: examples beam
@@ -188,11 +191,11 @@ benchmarks/%: benchmarks/%.c $(LIB)
 # ------------------------------------------------------------------------------
 
 clean:
-	rm -f src/*.o src/*.win.o tests/test_srr_basic tests/test_srr_races tests/test_srr_stress tests/test_srr_ipc tests/test_srr_wire tests/test_srr_embedded tests/test_srr_serial tests/test_srr_tiny tests/test_srr_esp32 tests/test_srr_p1 tests/test_srr_udp tests/*.exe
+	rm -f src/*.o src/*.win.o tests/test_srr_basic tests/test_srr_races tests/test_srr_stress tests/test_srr_ipc tests/test_srr_wire tests/test_srr_embedded tests/test_srr_serial tests/test_srr_tiny tests/test_srr_esp32 tests/test_srr_p1 tests/test_srr_udp tests/test_srr_resolver tests/*.exe
 	rm -f benchmarks/bench_srr benchmarks/*.exe
 	rm -f examples/synth_engine/synth_server examples/synth_engine/synth_cli
 	rm -f examples/pico/pico_device_sim examples/pico/pico_host_cli
-	rm -f tools/srr_cli
+	rm -f tools/srr_cli tools/srr_resolver
 	rm -f adapters/beam/srr_port_driver
 	rm -f $(LIB) libsrr_win32.a vgcore.* core.* *.log
 	@echo "Clean completed."

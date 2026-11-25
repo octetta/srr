@@ -26,6 +26,7 @@ tests/test_srr_tiny
 tests/test_srr_esp32
 tests/test_srr_p1
 tests/test_srr_udp
+tests/test_srr_resolver
 tests/*.exe
 
 # Benchmark executables
@@ -39,6 +40,7 @@ examples/pico/pico_host_cli
 examples/pico/pico_device_sim
 adapters/beam/srr_port_driver
 tools/srr_cli
+tools/srr_resolver
 
 # Core dumps, valgrind artifacts, and logs
 core

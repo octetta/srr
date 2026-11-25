@@ -11,12 +11,13 @@
 #include "srr_serial.h"
 #include "srr_wire.h"
 #include "srr_udp.h"
+#include "srr_resolver.h"
 
 static void print_usage(const char *prog) {
     printf("SRR Command-Line Tool\n\n");
     printf("Usage:\n");
     printf("  %s [target] <subcommand> [args...]\n\n", prog);
-    printf("Target Options (select one):\n");
+    printf("Target Options (select one for direct transport commands):\n");
     printf("  --ipc <name>             Target IPC service (Unix domain socket)\n");
     printf("  --serial <dev>           Target serial device (e.g. /dev/ttyACM0, /dev/ttyUSB0)\n");
     printf("  --baud <rate>            Serial baud rate (default: 115200)\n");
@@ -28,8 +29,14 @@ static void print_usage(const char *prog) {
     printf("  req <svc> <op> [payload] Send synchronous request with optional payload\n");
     printf("  pulse <svc> <op> [data]  Send asynchronous pulse\n");
     printf("  listen [seconds]         Listen for incoming pulses/events\n");
+    printf("  resolve <name>           Query resolver for service endpoint recipe\n");
+    printf("  register <name> <transport> <target> [baud] [svc_id] [ttl] Register service with resolver\n");
+    printf("  unregister <name>        Remove service from resolver\n");
+    printf("  list-services            List all registered services from resolver\n");
     printf("  help                     Display this help reference\n\n");
     printf("Examples:\n");
+    printf("  %s resolve temp-sensor\n", prog);
+    printf("  %s register temp-sensor SERIAL /dev/ttyACM0 115200 4097 0\n", prog);
     printf("  %s --sim info\n", prog);
     printf("  %s --ipc synth_engine req 1 1\n", prog);
     printf("  %s --serial /dev/ttyACM0 --baud 115200 info\n", prog);
@@ -86,6 +93,98 @@ int main(int argc, char **argv) {
     }
 
     const char *subcmd = argv[cmd_idx];
+
+    /* Resolver subcommands (operate against local resolver service or default) */
+    if (strcmp(subcmd, "resolve") == 0) {
+        if (cmd_idx + 1 >= argc) {
+            fprintf(stderr, "Error: usage: %s [--ipc <resolver>] resolve <service_name>\n", argv[0]);
+            return 1;
+        }
+        const char *target_svc = argv[cmd_idx + 1];
+        srr_endpoint_entry_t entry;
+        srr_status_t st = srr_resolve(ipc_name, target_svc, &entry, 2000);
+        if (st == SRR_OK) {
+            printf("Resolved Service: '%s'\n", entry.service_name);
+            printf("  Transport:   %s\n", srr_transport_to_string(entry.transport));
+            printf("  Endpoint:    %s\n", entry.endpoint);
+            if (entry.transport == SRR_TRANSPORT_SERIAL) {
+                printf("  Baud Rate:   %u\n", entry.baud_rate);
+            }
+            if (entry.service_id > 0) {
+                printf("  Service ID:  %u (0x%04X)\n", entry.service_id, entry.service_id);
+            }
+            if (entry.ttl_seconds > 0) {
+                printf("  TTL:         %u seconds\n", entry.ttl_seconds);
+            } else {
+                printf("  TTL:         static (permanent)\n");
+            }
+            return 0;
+        } else {
+            fprintf(stderr, "Error: Service '%s' not found or resolver unreachable (%s)\n", target_svc, srr_status_str(st));
+            return 1;
+        }
+    }
+
+    if (strcmp(subcmd, "register") == 0) {
+        if (cmd_idx + 3 >= argc) {
+            fprintf(stderr, "Error: usage: %s register <name> <transport> <endpoint> [baud] [service_id] [ttl]\n", argv[0]);
+            return 1;
+        }
+        srr_endpoint_entry_t entry;
+        memset(&entry, 0, sizeof(entry));
+        strncpy(entry.service_name, argv[cmd_idx + 1], sizeof(entry.service_name) - 1);
+        entry.transport = srr_transport_from_string(argv[cmd_idx + 2]);
+        strncpy(entry.endpoint, argv[cmd_idx + 3], sizeof(entry.endpoint) - 1);
+        if (cmd_idx + 4 < argc) entry.baud_rate = (uint32_t)atoi(argv[cmd_idx + 4]);
+        if (cmd_idx + 5 < argc) entry.service_id = (uint16_t)atoi(argv[cmd_idx + 5]);
+        if (cmd_idx + 6 < argc) entry.ttl_seconds = (uint32_t)atoi(argv[cmd_idx + 6]);
+
+        srr_status_t st = srr_register_service(ipc_name, &entry, 2000);
+        if (st == SRR_OK) {
+            printf("Successfully registered '%s' (%s -> %s)\n", entry.service_name, srr_transport_to_string(entry.transport), entry.endpoint);
+            return 0;
+        } else {
+            fprintf(stderr, "Error: Failed to register service with resolver (%s)\n", srr_status_str(st));
+            return 1;
+        }
+    }
+
+    if (strcmp(subcmd, "unregister") == 0) {
+        if (cmd_idx + 1 >= argc) {
+            fprintf(stderr, "Error: usage: %s unregister <service_name>\n", argv[0]);
+            return 1;
+        }
+        srr_status_t st = srr_unregister_service(ipc_name, argv[cmd_idx + 1], 2000);
+        if (st == SRR_OK) {
+            printf("Successfully unregistered '%s'\n", argv[cmd_idx + 1]);
+            return 0;
+        } else {
+            fprintf(stderr, "Error: Failed to unregister service (%s)\n", srr_status_str(st));
+            return 1;
+        }
+    }
+
+    if (strcmp(subcmd, "list-services") == 0) {
+        srr_connection_t *conn = NULL;
+        const char *svc = ipc_name ? ipc_name : SRR_RESOLVER_DEFAULT_SERVICE;
+        srr_status_t st = srr_connect(svc, NULL, &conn);
+        if (st != SRR_OK) {
+            fprintf(stderr, "Error connecting to resolver '%s': %s\n", svc, srr_status_str(st));
+            return 1;
+        }
+        char rep[4096] = {0};
+        size_t rep_len = 0;
+        st = srr_send_timed(conn, "LIST", 5, rep, sizeof(rep) - 1, &rep_len, 2000);
+        srr_disconnect(conn);
+        if (st == SRR_OK) {
+            printf("%s", rep);
+            return 0;
+        } else {
+            fprintf(stderr, "Error listing services: %s\n", srr_status_str(st));
+            return 1;
+        }
+    }
+
     pid_t sim_pid = 0;
     srr_connection_t *ipc_conn = NULL;
     srr_serial_port_t *serial_port = NULL;
