@@ -99,6 +99,31 @@ The exact same Send / Receive / Reply code and error contracts operate across fo
 
 ---
 
+## When NOT to Use SRR (Architectural Non-Goals)
+
+Engineering is about trade-offs. SRR is intentionally optimized for **low-latency control-plane RPC, telemetry pulses, and embedded coordination**. It is the wrong tool if:
+
+1. **You Are Streaming High-Bandwidth Bulk Data (Video, Audio PCM, File Transfers):**
+   - If you need to stream 4K video, continuous raw audio, or multi-megabyte files, use **raw streaming byte pipes** (raw TCP, Unix stream sockets, or shared memory ring buffers).
+   - *Why:* Breaking gigabytes of continuous streaming data into discrete lock-step request-reply frames adds unnecessary framing and acknowledgment overhead. Use streaming sockets for the high-bandwidth **data plane**, and use SRR for the **control plane** (e.g., `START_STREAM`, `STOP_STREAM`, `SET_BITRATE`).
+
+2. **You Need Massive Pub/Sub Fan-Out to Thousands of Subscribers:**
+   - If your architecture requires an event bus broadcasting to hundreds or thousands of decoupled dynamic consumers (like topic trees in **MQTT, Apache Kafka, or NATS**), SRR is not a broker.
+   - *Why:* SRR is fundamentally a point-to-point Send/Receive/Reply architecture with bounded in-memory queues. It does not provide consumer groups, disk persistence, or dynamic topic filtering.
+
+3. **You Are Building Public Internet APIs (HTTPS, TLS, OAuth2):**
+   - If you are exposing public-facing web endpoints to mobile apps or third-party web browsers across the open internet, use **HTTPS / REST, gRPC, or GraphQL**.
+   - *Why:* SRR has no built-in TLS handshake, OAuth2/JWT auth middleware, or HTTP/2 stack. It is built for internal system IPC, LAN networks, and hardware links. (Though local browser dashboards can easily interface via the included WebSocket bridge).
+
+4. **You Need Message Durability Across Reboots (Disk-Backed Queues):**
+   - If messages must be written to disk, survive server power cycles, and be retried hours later if a worker is offline (like **RabbitMQ, Celery, or AWS SQS**), SRR is not a message queue broker.
+   - *Why:* SRR is an in-memory, real-time message-passing system. When queues are full, it returns fast backpressure (`SRR_QUEUE_FULL`) in 40 nanoseconds rather than spooling to disk.
+
+5. **Your Entire Stack is Cloud-Only Microservices in Kubernetes:**
+   - If all your services live in the cloud and consist strictly of Go, Java, or Python talking across cloud nodes, **gRPC** is usually a better fit. gRPC provides automated schema codegen, service meshes (Envoy), and distributed tracing out of the box. SRR’s unique superpowers (zero heap, 335B RAM footprint, microsecond latency) are unnecessary if you already have gigabytes of cloud RAM.
+
+---
+
 ## Message-Oriented: What Can You Send Across It?
 
 **SRR is 100% discrete message-oriented, never stream-oriented.**
