@@ -114,8 +114,44 @@ For the Parallax Propeller P1, C is often secondary to **Spin** and **PASM (Prop
 ### 5.1 Native Spin Objects Provided in SRR
 The repository provides clean, production-ready Spin and PASM implementations in [`examples/p1_spin/`](../examples/p1_spin/):
 
+* **[`FullDuplexSerial.spin`](../examples/p1_spin/FullDuplexSerial.spin):** Canonical high-speed PASM UART driver (9,600 to 230,400+ baud) running inside a dedicated Cog, communicating via circular buffers in Hub RAM.
+* **[`SIDcog.spin`](../examples/p1_spin/SIDcog.spin):** Dedicated PASM audio synthesis Cog emulating the MOS 6581 sound synthesizer (3 voices, PWM counter DAC audio output on pins P10/P11, reading 29 SID registers from Hub RAM).
+* **[`SRR_SID_Server.spin`](../examples/p1_spin/SRR_SID_Server.spin):** Top-level multi-cog application orchestrating the PASM UART (Cog 1), the PASM SID synthesizer (Cog 2), and the SRR wire router (Cog 0) to expose `/dev/sid` over serial.
 * **[`SRR_HubMailbox.spin`](../examples/p1_spin/SRR_HubMailbox.spin):** Implements the Hub RAM mailbox, hardware lock arbitration (`lockset` / `lockclr`), 8-Cog routing, and request/reply buffer handoffs.
 * **[`SRR_Demo.spin`](../examples/p1_spin/SRR_Demo.spin):** Multi-cog demo where Cog 0 (Client) issues synchronous `SendRequest` calls to Cog 1 (Server), receiving synchronous replies and emitting asynchronous pulses.
+
+### 5.2 The SIDcog Resource Manager: High-Speed Serial Synth
+SRR exposes the Propeller P1 MOS 6581 SID sound synthesizer as a standard SRR resource (`service_id = 0x0051` or `SRR_SVC_SID`):
+
+1. **Integrated Multi-Cog Simulation (`--sim`):**
+   Run the arpeggio and filter sweep test right from your desktop with zero hardware:
+   ```bash
+   make examples
+   ./examples/p1_sid/srr_sid_cli --sim
+   ```
+2. **Interactive Host Control over Physical UART:**
+   Connect to a Propeller board (e.g. ActivityBoard, QuickStart) at 115,200 baud:
+   ```bash
+   # Reset and silence:
+   ./examples/p1_sid/srr_sid_cli /dev/ttyUSB0 reset
+
+   # Play Commodore 64 chord arpeggio:
+   ./examples/p1_sid/srr_sid_cli /dev/ttyUSB0 arp
+
+   # Resonant low-pass filter sweep:
+   ./examples/p1_sid/srr_sid_cli /dev/ttyUSB0 sweep
+
+   # Read formatted register snapshot ($00..$18):
+   ./examples/p1_sid/srr_sid_cli /dev/ttyUSB0 read
+
+   # Asynchronous one-way pulse write (reg $04 = $21: Voice 1 Sawtooth + Gate On):
+   ./examples/p1_sid/srr_sid_cli /dev/ttyUSB0 pulse 0x04 0x21
+   ```
+
+3. **Cross-Platform Python Client:**
+   ```bash
+   python3 examples/p1_sid/srr_sid_client.py --port /dev/ttyUSB0 arp
+   ```
 
 ```spin
 OBJ

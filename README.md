@@ -265,7 +265,7 @@ When a server dequeues a request from `srr_receive(chan, &req)`, the client is s
 - **Three-Tier Architecture:** Complete separation between transaction state logic, wire framing/serialization, and platform execution backends.
 - **Zero-Heap Embedded Profiles:** Dedicated profiles for microcontrollers (RP2040 Pico, AVR ATmega328P, ESP32, and Parallax Propeller P1) operating entirely on caller-provided static buffers without dynamic heap allocation.
 - **Empirical Performance:** Median round-trip latency of **6.7 µs** in-process, up to **446,000 transactions/sec** on multi-threaded workloads, and **2.78 Million frames/sec** COBS framing throughput.
-- **Zero Leaks & Race-Free:** 100% verified across 12 test suites under Valgrind with zero memory leaks and zero errors.
+- **Zero Leaks & Race-Free:** 100% verified across 15 test suites under Valgrind with zero memory leaks and zero errors.
 
 ---
 
@@ -574,6 +574,7 @@ make win32
 - **[Performance & Benchmark Report](docs/SRR_BENCHMARKS.md):** Detailed latency distributions, throughput tables, and memory analysis.
 - **[Embedded Profiles Specification](docs/SRR_EMBEDDED_PROFILES.md):** Detailed resource budgets and build guides for AVR Tiny and ESP32.
 - **[Parallax Propeller P1 Multi-Cog Architecture](docs/SRR_PROPELLER_P1.md):** Shared Hub RAM and Cog mailbox arbitration design.
+- **[Emulators & Virtual Targets Guide](docs/EMULATORS_AND_VIRTUAL_TARGETS.md):** Virtual simulation and testing across AVR, Pico, ESP32, and Propeller P1 (including the MOS 6581 SIDcog Resource Manager).
 - **[Wire Protocol Specification](docs/SRR_WIRE_PROTOCOL.md):** Binary framing, COBS encoding, and CRC-16-CCITT algorithm definition.
 - **[Formal API Specification](docs/SRR_API_SPEC.md):** Behavioral contracts, ownership semantics, and concurrency rules.
 - **[Architectural Decisions Log](docs/SRR_DECISIONS.md):** Key design choices, trade-offs, and resolutions.

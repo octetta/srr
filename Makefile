@@ -13,7 +13,7 @@ SRC     := src/srr_pthread.c src/srr_ipc.c src/srr_wire.c src/srr_serial.c src/s
 OBJ     := $(SRC:.c=.o)
 LIB     := libsrr.a
 
-TEST_SRCS := tests/test_srr_basic.c tests/test_srr_races.c tests/test_srr_stress.c tests/test_srr_ipc.c tests/test_srr_wire.c tests/test_srr_embedded.c tests/test_srr_serial.c tests/test_srr_tiny.c tests/test_srr_esp32.c tests/test_srr_p1.c tests/test_srr_udp.c tests/test_srr_resolver.c tests/test_srr_audit_regressions.c tests/test_srr_scatter_gather.c
+TEST_SRCS := tests/test_srr_basic.c tests/test_srr_races.c tests/test_srr_stress.c tests/test_srr_ipc.c tests/test_srr_wire.c tests/test_srr_embedded.c tests/test_srr_serial.c tests/test_srr_tiny.c tests/test_srr_esp32.c tests/test_srr_p1.c tests/test_srr_udp.c tests/test_srr_resolver.c tests/test_srr_audit_regressions.c tests/test_srr_scatter_gather.c tests/test_srr_sid.c
 TEST_BINS := $(TEST_SRCS:.c=)
 
 # Default target displays help
@@ -79,6 +79,8 @@ examples: $(LIB)
 	$(CC) $(CFLAGS) examples/pico/pico_device_sim.c $(LIB) -o examples/pico/pico_device_sim
 	$(CC) $(CFLAGS) examples/pico/pico_host_cli.c $(LIB) -o examples/pico/pico_host_cli
 	$(CC) $(CFLAGS) examples/example_scatter_gather.c $(LIB) -o examples/example_scatter_gather
+	$(CC) $(CFLAGS) examples/p1_sid/srr_sid_cli.c $(LIB) -o examples/p1_sid/srr_sid_cli
+	$(CC) $(CFLAGS) examples/p1_sid/srr_p1_sid_sim.c $(LIB) -o examples/p1_sid/srr_p1_sid_sim
 
 tools: $(LIB)
 	$(CC) $(CFLAGS) tools/srr_cli.c $(LIB) -o tools/srr_cli
@@ -156,6 +158,7 @@ test: $(LIB) $(TEST_BINS)
 	./tests/test_srr_resolver
 	./tests/test_srr_audit_regressions
 	./tests/test_srr_scatter_gather
+	./tests/test_srr_sid
 	python3 tests/conformance/test_conformance.py
 	@echo "All native tests passed!"
 
@@ -212,6 +215,7 @@ test-valgrind: $(LIB) $(TEST_BINS)
 	valgrind --leak-check=full --error-exitcode=1 ./tests/test_srr_resolver
 	valgrind --leak-check=full --error-exitcode=1 ./tests/test_srr_audit_regressions
 	valgrind --leak-check=full --error-exitcode=1 ./tests/test_srr_scatter_gather
+	valgrind --leak-check=full --error-exitcode=1 ./tests/test_srr_sid
 	@echo "All Valgrind checks passed with 0 errors and 0 leaks!"
 
 test-beam: examples beam
@@ -263,10 +267,11 @@ benchmarks/%: benchmarks/%.c $(LIB)
 # ------------------------------------------------------------------------------
 
 clean:
-	rm -f src/*.o src/*.win.o src/*.avr.o src/*.pico.o tests/test_srr_basic tests/test_srr_races tests/test_srr_stress tests/test_srr_ipc tests/test_srr_wire tests/test_srr_embedded tests/test_srr_serial tests/test_srr_tiny tests/test_srr_esp32 tests/test_srr_p1 tests/test_srr_udp tests/test_srr_resolver tests/test_srr_audit_regressions tests/test_srr_scatter_gather tests/conformance/test_c_vectors tests/conformance/generate_vectors tests/*.exe
+	rm -f src/*.o src/*.win.o src/*.avr.o src/*.pico.o tests/test_srr_basic tests/test_srr_races tests/test_srr_stress tests/test_srr_ipc tests/test_srr_wire tests/test_srr_embedded tests/test_srr_serial tests/test_srr_tiny tests/test_srr_esp32 tests/test_srr_p1 tests/test_srr_udp tests/test_srr_resolver tests/test_srr_audit_regressions tests/test_srr_scatter_gather tests/test_srr_sid tests/conformance/test_c_vectors tests/conformance/generate_vectors tests/*.exe
 	rm -f benchmarks/bench_srr benchmarks/*.exe
 	rm -f examples/synth_engine/synth_server examples/synth_engine/synth_cli
 	rm -f examples/pico/pico_device_sim examples/pico/pico_host_cli examples/example_scatter_gather
+	rm -f examples/p1_sid/srr_sid_cli examples/p1_sid/srr_p1_sid_sim
 	rm -f tools/srr_cli tools/srr_resolver
 	rm -rf examples/go/bin
 	rm -f adapters/beam/srr_port_driver
