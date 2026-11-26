@@ -182,9 +182,28 @@ sequenceDiagram
     SRR-)Server: Delivered to srr_receive queue
 ```
 
-1. **The Server Listens and Replies**: Creates a channel (in-process or named IPC/wire service) and loops on `srr_receive(chan, &req)`. When a request arrives, it inspects the payload and calls `srr_reply(req, reply_data, len)` to return the response and unblock the client.
-2. **The Client Connects and Sends**: Connects to the service and calls `srr_send()` (or `srr_send_timed()`). The client blocks until the reply arrives or a timeout occurs.
-3. **One-Way Pulses**: When fire-and-forget telemetry, heartbeats, or interrupts are needed without waiting for a reply, either party emits an `srr_pulse(conn, code, value)`.
+### The Adopter's Mental Model: 3 Core Shifts
+
+1. **Think in Transactions, Not Byte Streams:**
+   You never write loops to handle partial reads, track byte counts, search for newline `\n` delimiters, or assemble fragmented TCP/serial streams. You submit an entire message and receive an entire reply. If a timeout occurs, that transaction is permanently dead—it will never pollute future reads.
+
+2. **The Two Interaction Primitives (Send vs. Pulse):**
+   * **Need an answer or confirmation?** Use `srr_send()` (Client blocks safely until Server answers). Ideal for RPC commands, parameter updates, and queries.
+   * **Fire-and-forget event or telemetry?** Use `srr_pulse()` (Client never blocks, Server never replies). Ideal for 100 Hz sensor ticks, heartbeats, alarms, and GPIO triggers.
+
+3. **Code to Services, Not Physical Cables:**
+   Avoid hardcoding `/dev/ttyUSB0` or IP addresses in business logic. Connect to a symbolic service name (`"motor_controller"`). Whether that service lives across a thread pointer, a Unix socket, a UDP network datagram, or an Arduino over USB serial, your application code is identical.
+
+---
+
+### The Golden Rule for Servers: "Always Answer or Dispose"
+
+When a server dequeues a request from `srr_receive(chan, &req)`, the client is suspended waiting for a resolution. The server **must** do one of the following:
+
+* **Success:** `srr_reply(req, reply_data, len)` — delivers response data and unblocks client with `SRR_OK`. Automatically disposes of the request handle.
+* **Business Error:** `srr_reply_error(req, SRR_INVALID)` — unblocks client with an explicit error code. Automatically disposes of the request handle.
+* **Cancellation / Abandonment:** `srr_request_dispose(req)` — drops the request and safely unblocks the client with `SRR_CANCELLED` (no hanging clients).
+* **If it's a Pulse (`srr_request_is_pulse(req)`):** Read `srr_pulse_code()` and `srr_pulse_value()`, then call `srr_request_dispose(req)`. (Never call `srr_reply()` on a pulse).
 
 ---
 
