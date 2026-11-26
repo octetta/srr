@@ -331,6 +331,30 @@ void run_server(srr_channel_t *channel) {
 }
 ```
 
+### Zero-Copy Scatter-Gather I/O (`srr_sendv` / `srr_replyv`)
+On Tier 1 (In-Process) and Tier 2 (Host OS IPC), agents can eliminate intermediate buffer copies by transmitting disjoint memory regions (e.g. command header + bulk data) directly:
+
+```c
+// CLIENT: Transmit header struct + data buffer without packing into a single buffer
+cmd_header_t hdr = { .cmd_id = 1 };
+srr_iovec_t send_iov[2] = {
+    { .iov_base = &hdr,    .iov_len = sizeof(hdr) },
+    { .iov_base = raw_buf, .iov_len = raw_len }
+};
+srr_iovec_t rep_iov[2] = {
+    { .iov_base = &rep_hdr, .iov_len = sizeof(rep_hdr) },
+    { .iov_base = out_buf,  .iov_len = out_cap }
+};
+srr_status_t rc = srr_sendv(conn, send_iov, 2, rep_iov, 2, &out_reply_size);
+
+// SERVER: Reply with non-contiguous status header + telemetry data
+srr_iovec_t srv_rep[2] = {
+    { .iov_base = &status, .iov_len = sizeof(status) },
+    { .iov_base = &telem,  .iov_len = sizeof(telem) }
+};
+srr_replyv(req, srv_rep, 2);
+```
+
 ---
 
 ## 7. Status Codes & Error Handling Reference

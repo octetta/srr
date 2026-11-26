@@ -66,6 +66,16 @@ typedef struct {
     const char *service_name;      /* Optional: if set, binds a local IPC service */
 } srr_channel_options_t;
 
+/*
+ * Scatter-gather I/O vector.
+ * Allows sending and receiving across non-contiguous buffers without
+ * allocating intermediate staging buffers or performing redundant memcpys.
+ */
+typedef struct srr_iovec {
+    void   *iov_base;  /* Base address of memory region */
+    size_t  iov_len;   /* Byte length of memory region */
+} srr_iovec_t;
+
 /* Connection Options */
 typedef struct {
     uint32_t default_timeout_ms; /* 0 = wait indefinitely */
@@ -175,6 +185,33 @@ srr_status_t srr_send_timed(
     uint32_t timeout_ms);
 
 /*
+ * Send a synchronous scatter-gather request and block until reply is received.
+ * Gathers send_iov buffers into the message payload without requiring callers
+ * to pack them into a contiguous staging buffer.
+ * Scatters incoming reply payload across reply_iov buffers.
+ * If total reply size exceeds total capacity of reply_iov, returns SRR_TOO_LARGE.
+ */
+srr_status_t srr_sendv(
+    srr_connection_t *connection,
+    const srr_iovec_t *send_iov,
+    size_t send_iovcnt,
+    const srr_iovec_t *reply_iov,
+    size_t reply_iovcnt,
+    size_t *out_reply_size);
+
+/*
+ * Scatter-gather send with a specific timeout in milliseconds (0 = indefinite).
+ */
+srr_status_t srr_sendv_timed(
+    srr_connection_t *connection,
+    const srr_iovec_t *send_iov,
+    size_t send_iovcnt,
+    const srr_iovec_t *reply_iov,
+    size_t reply_iovcnt,
+    size_t *out_reply_size,
+    uint32_t timeout_ms);
+
+/*
  * Send an asynchronous one-way pulse (no reply expected).
  * Non-blocking: returns SRR_QUEUE_FULL if channel queue is full.
  */
@@ -212,6 +249,18 @@ srr_status_t srr_reply(
     srr_request_t *request,
     const void *reply_data,
     size_t reply_size);
+
+/*
+ * Reply to client with a scatter-gather data payload.
+ * Transmits non-contiguous buffers (e.g. reply header + data slice) directly
+ * without allocating or copying into an intermediate buffer.
+ * Ownership transfer: this call consumes and disposes the request handle.
+ * The request pointer must not be used or disposed after calling this function.
+ */
+srr_status_t srr_replyv(
+    srr_request_t *request,
+    const srr_iovec_t *reply_iov,
+    size_t reply_iovcnt);
 
 /*
  * Reply to client with an explicit error code.

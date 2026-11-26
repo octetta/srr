@@ -8,6 +8,7 @@
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/uio.h>
 #include "srr_internal.h"
 #include "srr_proto.h"
 
@@ -76,6 +77,168 @@ int srr_ipc_read_all(intptr_t handle, void *buf, size_t len, int timeout_ms) {
         p += n;
         remaining -= (size_t)n;
     }
+    return 0;
+}
+
+#ifndef UIO_MAXIOV
+#define UIO_MAXIOV 1024
+#endif
+
+int srr_ipc_writev_all(intptr_t handle, const srr_iovec_t *iov, size_t iovcnt, int timeout_ms) {
+    if (!iov || iovcnt == 0) return 0;
+    int fd = (int)handle;
+
+    struct iovec local_iov[16];
+    struct iovec *vecs = local_iov;
+    if (iovcnt > 16) {
+        vecs = (struct iovec *)malloc(iovcnt * sizeof(struct iovec));
+        if (!vecs) return -1;
+    }
+
+    size_t total = 0;
+    for (size_t i = 0; i < iovcnt; i++) {
+        vecs[i].iov_base = iov[i].iov_base;
+        vecs[i].iov_len  = iov[i].iov_len;
+        total += iov[i].iov_len;
+    }
+    if (total == 0) {
+        if (vecs != local_iov) free(vecs);
+        return 0;
+    }
+
+    size_t cur_idx = 0;
+    while (cur_idx < iovcnt) {
+        while (cur_idx < iovcnt && vecs[cur_idx].iov_len == 0) {
+            cur_idx++;
+        }
+        if (cur_idx >= iovcnt) break;
+
+        if (timeout_ms >= 0) {
+            struct pollfd pfd = { .fd = fd, .events = POLLOUT, .revents = 0 };
+            int ret = poll(&pfd, 1, timeout_ms);
+            if (ret <= 0) {
+                if (vecs != local_iov) free(vecs);
+                return (ret == 0) ? -2 : -1;
+            }
+        }
+
+        int count = (int)(iovcnt - cur_idx);
+        if (count > UIO_MAXIOV) count = UIO_MAXIOV;
+
+        struct msghdr msg = {
+            .msg_name = NULL,
+            .msg_namelen = 0,
+            .msg_iov = &vecs[cur_idx],
+            .msg_iovlen = (size_t)count,
+            .msg_control = NULL,
+            .msg_controllen = 0,
+            .msg_flags = 0
+        };
+        ssize_t n = sendmsg(fd, &msg, MSG_NOSIGNAL);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            if (vecs != local_iov) free(vecs);
+            return -1;
+        }
+        if (n == 0) {
+            if (vecs != local_iov) free(vecs);
+            return -1;
+        }
+
+        size_t written = (size_t)n;
+        while (written > 0 && cur_idx < iovcnt) {
+            if (written >= vecs[cur_idx].iov_len) {
+                written -= vecs[cur_idx].iov_len;
+                vecs[cur_idx].iov_len = 0;
+                cur_idx++;
+            } else {
+                vecs[cur_idx].iov_base = (char *)vecs[cur_idx].iov_base + written;
+                vecs[cur_idx].iov_len  -= written;
+                written = 0;
+            }
+        }
+    }
+
+    if (vecs != local_iov) free(vecs);
+    return 0;
+}
+
+int srr_ipc_readv_all(intptr_t handle, const srr_iovec_t *iov, size_t iovcnt, size_t total_to_read, int timeout_ms) {
+    if (total_to_read == 0) return 0;
+    if (!iov || iovcnt == 0) return -1;
+    int fd = (int)handle;
+
+    struct iovec local_iov[16];
+    struct iovec *vecs = local_iov;
+    if (iovcnt > 16) {
+        vecs = (struct iovec *)malloc(iovcnt * sizeof(struct iovec));
+        if (!vecs) return -1;
+    }
+
+    size_t total_cap = 0;
+    for (size_t i = 0; i < iovcnt; i++) {
+        vecs[i].iov_base = iov[i].iov_base;
+        vecs[i].iov_len  = iov[i].iov_len;
+        total_cap += iov[i].iov_len;
+    }
+    if (total_cap < total_to_read) {
+        if (vecs != local_iov) free(vecs);
+        return -1;
+    }
+
+    size_t remaining_to_read = total_to_read;
+    for (size_t i = 0; i < iovcnt; i++) {
+        if (vecs[i].iov_len > remaining_to_read) {
+            vecs[i].iov_len = remaining_to_read;
+            remaining_to_read = 0;
+        } else {
+            remaining_to_read -= vecs[i].iov_len;
+        }
+    }
+
+    size_t cur_idx = 0;
+    while (cur_idx < iovcnt) {
+        while (cur_idx < iovcnt && vecs[cur_idx].iov_len == 0) {
+            cur_idx++;
+        }
+        if (cur_idx >= iovcnt) break;
+
+        struct pollfd pfd = { .fd = fd, .events = POLLIN, .revents = 0 };
+        int ret = poll(&pfd, 1, (timeout_ms >= 0) ? timeout_ms : -1);
+        if (ret <= 0) {
+            if (vecs != local_iov) free(vecs);
+            return (ret == 0) ? -2 : -1;
+        }
+
+        int count = (int)(iovcnt - cur_idx);
+        if (count > UIO_MAXIOV) count = UIO_MAXIOV;
+
+        ssize_t n = readv(fd, &vecs[cur_idx], count);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            if (vecs != local_iov) free(vecs);
+            return -1;
+        }
+        if (n == 0) {
+            if (vecs != local_iov) free(vecs);
+            return -1; /* EOF */
+        }
+
+        size_t nread = (size_t)n;
+        while (nread > 0 && cur_idx < iovcnt) {
+            if (nread >= vecs[cur_idx].iov_len) {
+                nread -= vecs[cur_idx].iov_len;
+                vecs[cur_idx].iov_len = 0;
+                cur_idx++;
+            } else {
+                vecs[cur_idx].iov_base = (char *)vecs[cur_idx].iov_base + nread;
+                vecs[cur_idx].iov_len  -= nread;
+                nread = 0;
+            }
+        }
+    }
+
+    if (vecs != local_iov) free(vecs);
     return 0;
 }
 

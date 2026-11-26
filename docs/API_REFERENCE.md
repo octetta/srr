@@ -124,6 +124,17 @@ Replies to the client and unblocks the client's `srr_send()`.
 - If the client already timed out or disconnected, returns `SRR_TIMEOUT` or `SRR_DISCONNECTED` to inform the server.
 - Automatically disposes of the request handle—no separate `srr_request_dispose()` call is needed.
 
+### `srr_replyv` (Scatter-Gather Reply)
+```c
+srr_status_t srr_replyv(
+    srr_request_t *request,
+    const srr_iovec_t *reply_iov,
+    size_t reply_iovcnt);
+```
+Replies to client using non-contiguous memory vectors (e.g. status header + bulk data buffer) directly without allocating or copying into an intermediate staging buffer.
+- On Unix domain sockets, transmits the header and vector buffers in an atomic `sendmsg(..., MSG_NOSIGNAL)` / `writev()` call.
+- Automatically disposes of the request handle.
+
 ### `srr_reply_error`
 ```c
 srr_status_t srr_reply_error(
@@ -193,6 +204,35 @@ srr_status_t srr_send_timed(
     uint32_t timeout_ms);
 ```
 Same as `srr_send()`, but bounds the maximum blocking time to `timeout_ms` milliseconds. If the timeout expires before a reply arrives, returns `SRR_TIMEOUT`.
+
+### `srr_sendv` & `srr_sendv_timed` (Scatter-Gather Send)
+```c
+typedef struct srr_iovec {
+    void   *iov_base;
+    size_t  iov_len;
+} srr_iovec_t;
+
+srr_status_t srr_sendv(
+    srr_connection_t *connection,
+    const srr_iovec_t *send_iov,
+    size_t send_iovcnt,
+    const srr_iovec_t *reply_iov,
+    size_t reply_iovcnt,
+    size_t *out_reply_size);
+
+srr_status_t srr_sendv_timed(
+    srr_connection_t *connection,
+    const srr_iovec_t *send_iov,
+    size_t send_iovcnt,
+    const srr_iovec_t *reply_iov,
+    size_t reply_iovcnt,
+    size_t *out_reply_size,
+    uint32_t timeout_ms);
+```
+Zero-copy vector transmission and reception:
+- **Gathers** non-contiguous memory slices from `send_iov` into the request payload. On Unix sockets, transmits directly via atomic `writev` / `sendmsg`.
+- **Scatters** incoming reply payload directly across `reply_iov` memory buffers without temporary user-space staging buffers.
+- If the incoming reply exceeds total capacity across `reply_iov`, fills what fits and returns `SRR_TOO_LARGE`.
 
 ### `srr_pulse`
 ```c

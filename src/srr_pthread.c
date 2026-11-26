@@ -462,18 +462,80 @@ static void compute_timespec(uint32_t timeout_ms, struct timespec *ts) {
     ts->tv_nsec = (long)(nsec % 1000000000ULL);
 }
 
-srr_status_t srr_send_timed(
+static size_t iov_total_len(const srr_iovec_t *iov, size_t iovcnt) {
+    if (!iov || iovcnt == 0) return 0;
+    size_t total = 0;
+    for (size_t i = 0; i < iovcnt; i++) {
+        total += iov[i].iov_len;
+    }
+    return total;
+}
+
+static void copy_iov_to_iov(
+    const srr_iovec_t *src_iov, size_t src_cnt,
+    const srr_iovec_t *dst_iov, size_t dst_cnt,
+    size_t total_to_copy)
+{
+    size_t src_idx = 0, src_off = 0;
+    size_t dst_idx = 0, dst_off = 0;
+    size_t copied = 0;
+
+    while (copied < total_to_copy && src_idx < src_cnt && dst_idx < dst_cnt) {
+        while (src_idx < src_cnt && src_off >= src_iov[src_idx].iov_len) {
+            src_idx++;
+            src_off = 0;
+        }
+        while (dst_idx < dst_cnt && dst_off >= dst_iov[dst_idx].iov_len) {
+            dst_idx++;
+            dst_off = 0;
+        }
+        if (src_idx >= src_cnt || dst_idx >= dst_cnt) break;
+
+        size_t src_avail = src_iov[src_idx].iov_len - src_off;
+        size_t dst_avail = dst_iov[dst_idx].iov_len - dst_off;
+        size_t chunk = src_avail < dst_avail ? src_avail : dst_avail;
+        if (chunk > total_to_copy - copied) {
+            chunk = total_to_copy - copied;
+        }
+
+        if (chunk > 0) {
+            if (dst_iov[dst_idx].iov_base && src_iov[src_idx].iov_base) {
+                memcpy((char *)dst_iov[dst_idx].iov_base + dst_off,
+                       (const char *)src_iov[src_idx].iov_base + src_off,
+                       chunk);
+            }
+            src_off += chunk;
+            dst_off += chunk;
+            copied += chunk;
+        }
+    }
+}
+
+srr_status_t srr_sendv_timed(
     srr_connection_t *connection,
-    const void *request_data,
-    size_t request_size,
-    void *reply_buffer,
-    size_t reply_capacity,
+    const srr_iovec_t *send_iov,
+    size_t send_iovcnt,
+    const srr_iovec_t *reply_iov,
+    size_t reply_iovcnt,
     size_t *out_reply_size,
     uint32_t timeout_ms)
 {
     if (!connection) return SRR_INVALID;
-    if (request_size > 0 && !request_data) return SRR_INVALID;
-    if (reply_capacity > 0 && !reply_buffer) return SRR_INVALID;
+    if (send_iovcnt > 0 && !send_iov) return SRR_INVALID;
+    for (size_t i = 0; i < send_iovcnt; i++) {
+        if (send_iov[i].iov_len > 0 && !send_iov[i].iov_base) {
+            return SRR_INVALID;
+        }
+    }
+    if (reply_iovcnt > 0 && !reply_iov) return SRR_INVALID;
+    for (size_t i = 0; i < reply_iovcnt; i++) {
+        if (reply_iov[i].iov_len > 0 && !reply_iov[i].iov_base) {
+            return SRR_INVALID;
+        }
+    }
+
+    size_t request_size = iov_total_len(send_iov, send_iovcnt);
+    size_t reply_capacity = iov_total_len(reply_iov, reply_iovcnt);
 
     pthread_mutex_lock(&connection->send_lock);
     if (!connection->connected) {
@@ -493,24 +555,33 @@ srr_status_t srr_send_timed(
             .payload_len = (uint32_t)request_size
         };
 
-        if (srr_ipc_write_all(h, &hdr, sizeof(hdr), (timeout_ms > 0) ? (int)timeout_ms : -1) != 0) {
-            pthread_mutex_unlock(&connection->send_lock);
-            return SRR_DISCONNECTED;
+        srr_iovec_t local_send_iov[17];
+        srr_iovec_t *vecs = local_send_iov;
+        size_t total_vecs = 1 + send_iovcnt;
+        if (total_vecs > 17) {
+            vecs = (srr_iovec_t *)malloc(total_vecs * sizeof(srr_iovec_t));
+            if (!vecs) {
+                pthread_mutex_unlock(&connection->send_lock);
+                return SRR_NO_MEMORY;
+            }
+        }
+        vecs[0].iov_base = &hdr;
+        vecs[0].iov_len  = sizeof(hdr);
+        for (size_t i = 0; i < send_iovcnt; i++) {
+            vecs[1 + i] = send_iov[i];
         }
 
-        if (request_size > 0) {
-            if (srr_ipc_write_all(h, request_data, request_size, (timeout_ms > 0) ? (int)timeout_ms : -1) != 0) {
-                pthread_mutex_unlock(&connection->send_lock);
-                return SRR_DISCONNECTED;
-            }
+        int wrc = srr_ipc_writev_all(h, vecs, total_vecs, (timeout_ms > 0) ? (int)timeout_ms : -1);
+        if (vecs != local_send_iov) free(vecs);
+
+        if (wrc != 0) {
+            pthread_mutex_unlock(&connection->send_lock);
+            return SRR_DISCONNECTED;
         }
 
         srr_frame_header_t rep_hdr;
         int rrc = srr_ipc_read_all(h, &rep_hdr, sizeof(rep_hdr), (timeout_ms > 0) ? (int)timeout_ms : -1);
         if (rrc == -2) {
-            /* Timeout on stream connection: connection stream is now indeterminate because
-             * the server may deliver the reply at any point in the future.
-             * Close socket and mark disconnected so future calls do not read stale bytes. */
             connection->connected = false;
 #ifdef _WIN32
             CloseHandle((HANDLE)connection->ipc_handle);
@@ -534,7 +605,6 @@ srr_status_t srr_send_timed(
         }
 
         if (rep_hdr.trans_id != tid) {
-            /* Mismatched transaction ID: stream protocol violation or desynchronization */
             connection->connected = false;
 #ifdef _WIN32
             CloseHandle((HANDLE)connection->ipc_handle);
@@ -569,7 +639,7 @@ srr_status_t srr_send_timed(
             if (rep_hdr.payload_len > reply_capacity) {
                 size_t to_copy = reply_capacity;
                 if (to_copy > 0) {
-                    if (srr_ipc_read_all(h, reply_buffer, to_copy, 5000) != 0) {
+                    if (srr_ipc_readv_all(h, reply_iov, reply_iovcnt, to_copy, 5000) != 0) {
                         pthread_mutex_unlock(&connection->send_lock);
                         return SRR_DISCONNECTED;
                     }
@@ -588,7 +658,7 @@ srr_status_t srr_send_timed(
                 return SRR_TOO_LARGE;
             } else {
                 if (rep_hdr.payload_len > 0) {
-                    if (srr_ipc_read_all(h, reply_buffer, rep_hdr.payload_len, 5000) != 0) {
+                    if (srr_ipc_readv_all(h, reply_iov, reply_iovcnt, rep_hdr.payload_len, 5000) != 0) {
                         pthread_mutex_unlock(&connection->send_lock);
                         return SRR_DISCONNECTED;
                     }
@@ -627,11 +697,19 @@ srr_status_t srr_send_timed(
             pthread_mutex_unlock(&connection->send_lock);
             return SRR_NO_MEMORY;
         }
-        memcpy(req->req_data, request_data, request_size);
+        size_t off = 0;
+        for (size_t i = 0; i < send_iovcnt; i++) {
+            if (send_iov[i].iov_len > 0 && send_iov[i].iov_base) {
+                memcpy((char *)req->req_data + off, send_iov[i].iov_base, send_iov[i].iov_len);
+                off += send_iov[i].iov_len;
+            }
+        }
         req->req_size = request_size;
     }
 
-    req->reply_buf = reply_buffer;
+    req->reply_buf = NULL;
+    req->reply_iov = reply_iov;
+    req->reply_iovcnt = reply_iovcnt;
     req->reply_cap = reply_capacity;
     req->out_reply_size = out_reply_size;
 
@@ -693,6 +771,48 @@ srr_status_t srr_send_timed(
     srr_request_release(req);
     pthread_mutex_unlock(&connection->send_lock);
     return outcome;
+}
+
+srr_status_t srr_sendv(
+    srr_connection_t *connection,
+    const srr_iovec_t *send_iov,
+    size_t send_iovcnt,
+    const srr_iovec_t *reply_iov,
+    size_t reply_iovcnt,
+    size_t *out_reply_size)
+{
+    uint32_t to = connection ? connection->default_timeout_ms : 0;
+    return srr_sendv_timed(
+        connection,
+        send_iov,
+        send_iovcnt,
+        reply_iov,
+        reply_iovcnt,
+        out_reply_size,
+        to);
+}
+
+srr_status_t srr_send_timed(
+    srr_connection_t *connection,
+    const void *request_data,
+    size_t request_size,
+    void *reply_buffer,
+    size_t reply_capacity,
+    size_t *out_reply_size,
+    uint32_t timeout_ms)
+{
+    if (request_size > 0 && !request_data) return SRR_INVALID;
+    if (reply_capacity > 0 && !reply_buffer) return SRR_INVALID;
+    srr_iovec_t send_iov = { .iov_base = (void *)request_data, .iov_len = request_size };
+    srr_iovec_t rep_iov  = { .iov_base = reply_buffer,         .iov_len = reply_capacity };
+    return srr_sendv_timed(
+        connection,
+        (request_size > 0) ? &send_iov : NULL,
+        (request_size > 0) ? 1 : 0,
+        (reply_capacity > 0) ? &rep_iov : NULL,
+        (reply_capacity > 0) ? 1 : 0,
+        out_reply_size,
+        timeout_ms);
 }
 
 srr_status_t srr_send(
@@ -821,17 +941,24 @@ size_t srr_request_size(const srr_request_t *request) {
     return request ? request->req_size : 0;
 }
 
-srr_status_t srr_reply(
+srr_status_t srr_replyv(
     srr_request_t *request,
-    const void *reply_data,
-    size_t reply_size)
+    const srr_iovec_t *reply_iov,
+    size_t reply_iovcnt)
 {
     if (!request) return SRR_INVALID;
-    if (reply_size > 0 && !reply_data) return SRR_INVALID;
+    if (reply_iovcnt > 0 && !reply_iov) return SRR_INVALID;
+    for (size_t i = 0; i < reply_iovcnt; i++) {
+        if (reply_iov[i].iov_len > 0 && !reply_iov[i].iov_base) {
+            return SRR_INVALID;
+        }
+    }
     if (request->type == SRR_ITEM_PULSE) {
         srr_request_dispose(request);
         return SRR_INVALID;
     }
+
+    size_t reply_size = iov_total_len(reply_iov, reply_iovcnt);
 
     /* Single-winner transaction state arbitration */
     pthread_mutex_lock(&request->lock);
@@ -889,12 +1016,25 @@ srr_status_t srr_reply(
                 .trans_id = request->ipc_trans_id,
                 .payload_len = (uint32_t)reply_size
             };
-            if (srr_ipc_write_all(request->ipc_client_handle, &rep_hdr, sizeof(rep_hdr), 5000) != 0) {
-                write_status = SRR_DISCONNECTED;
-            } else if (reply_size > 0 && reply_data) {
-                if (srr_ipc_write_all(request->ipc_client_handle, reply_data, reply_size, 5000) != 0) {
+
+            srr_iovec_t local_rep_iov[17];
+            srr_iovec_t *vecs = local_rep_iov;
+            size_t total_vecs = 1 + reply_iovcnt;
+            if (total_vecs > 17) {
+                vecs = (srr_iovec_t *)malloc(total_vecs * sizeof(srr_iovec_t));
+            }
+            if (vecs) {
+                vecs[0].iov_base = &rep_hdr;
+                vecs[0].iov_len  = sizeof(rep_hdr);
+                for (size_t i = 0; i < reply_iovcnt; i++) {
+                    vecs[1 + i] = reply_iov[i];
+                }
+                if (srr_ipc_writev_all(request->ipc_client_handle, vecs, total_vecs, 5000) != 0) {
                     write_status = SRR_DISCONNECTED;
                 }
+                if (vecs != local_rep_iov) free(vecs);
+            } else {
+                write_status = SRR_NO_MEMORY;
             }
             pthread_mutex_unlock(request->ipc_client_lock);
         } else {
@@ -916,8 +1056,13 @@ srr_status_t srr_reply(
         request->state = SRR_STATE_ERROR;
         reply_result = SRR_TOO_LARGE;
     } else {
-        if (reply_size > 0 && request->reply_buf && reply_data) {
-            memcpy(request->reply_buf, reply_data, reply_size);
+        if (reply_size > 0 && reply_iov && reply_iovcnt > 0) {
+            if (request->reply_iov && request->reply_iovcnt > 0) {
+                copy_iov_to_iov(reply_iov, reply_iovcnt, request->reply_iov, request->reply_iovcnt, reply_size);
+            } else if (request->reply_buf) {
+                srr_iovec_t single_dst = { .iov_base = request->reply_buf, .iov_len = request->reply_cap };
+                copy_iov_to_iov(reply_iov, reply_iovcnt, &single_dst, 1, reply_size);
+            }
         }
         request->terminal_status = SRR_OK;
         request->state = SRR_STATE_REPLIED;
@@ -928,6 +1073,19 @@ srr_status_t srr_reply(
 
     srr_request_release(request);
     return reply_result;
+}
+
+srr_status_t srr_reply(
+    srr_request_t *request,
+    const void *reply_data,
+    size_t reply_size)
+{
+    if (reply_size > 0 && !reply_data) return SRR_INVALID;
+    srr_iovec_t rep_iov = { .iov_base = (void *)reply_data, .iov_len = reply_size };
+    return srr_replyv(
+        request,
+        (reply_size > 0) ? &rep_iov : NULL,
+        (reply_size > 0) ? 1 : 0);
 }
 
 srr_status_t srr_reply_error(

@@ -59,6 +59,35 @@ int srr_ipc_read_all(intptr_t handle, void *buf, size_t len, int timeout_ms) {
     return 0;
 }
 
+int srr_ipc_writev_all(intptr_t handle, const srr_iovec_t *iov, size_t iovcnt, int timeout_ms) {
+    if (!iov || iovcnt == 0) return 0;
+    for (size_t i = 0; i < iovcnt; i++) {
+        if (iov[i].iov_len > 0 && iov[i].iov_base) {
+            if (srr_ipc_write_all(handle, iov[i].iov_base, iov[i].iov_len, timeout_ms) != 0) {
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+
+int srr_ipc_readv_all(intptr_t handle, const srr_iovec_t *iov, size_t iovcnt, size_t total_to_read, int timeout_ms) {
+    if (total_to_read == 0) return 0;
+    if (!iov || iovcnt == 0) return -1;
+    size_t remaining = total_to_read;
+
+    for (size_t i = 0; i < iovcnt && remaining > 0; i++) {
+        if (iov[i].iov_len > 0 && iov[i].iov_base) {
+            size_t chunk = remaining < iov[i].iov_len ? remaining : iov[i].iov_len;
+            if (srr_ipc_read_all(handle, iov[i].iov_base, chunk, timeout_ms) != 0) {
+                return -1;
+            }
+            remaining -= chunk;
+        }
+    }
+    return (remaining == 0) ? 0 : -1;
+}
+
 typedef struct {
     srr_channel_t   *channel;
     HANDLE           pipe_handle;

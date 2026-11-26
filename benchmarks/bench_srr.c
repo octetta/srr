@@ -284,6 +284,101 @@ static void run_bench_ipc_1to1(void) {
 
 /*
  * ----------------------------------------------------------------------------
+ * 3b. Scatter-Gather Process IPC Benchmark (Header + Payload via sendv)
+ * ----------------------------------------------------------------------------
+ */
+
+static void *bench_scatter_echo_server(void *arg) {
+    srr_channel_t *chan = (srr_channel_t *)arg;
+    srr_request_t *req = NULL;
+
+    while (srr_receive(chan, &req) == SRR_OK) {
+        if (srr_request_is_pulse(req)) {
+            srr_request_dispose(req);
+            break;
+        }
+        const void *data = srr_request_data(req);
+        size_t sz = srr_request_size(req);
+
+        /* Reply with 2 scatter-gather slices */
+        size_t half = sz / 2;
+        srr_iovec_t rep_iov[2] = {
+            { .iov_base = (void *)data, .iov_len = half },
+            { .iov_base = (void *)((const char *)data + half), .iov_len = sz - half }
+        };
+        srr_replyv(req, rep_iov, 2);
+    }
+    return NULL;
+}
+
+static void run_bench_scatter_gather_ipc(void) {
+    const char *svc = "srr_bench_scatter_service";
+    srr_channel_options_t opts = {
+        .queue_capacity = 256,
+        .max_request_size = 2048,
+        .max_reply_size = 2048,
+        .service_name = svc
+    };
+    srr_channel_t *chan = NULL;
+    assert(srr_channel_create(&opts, &chan) == SRR_OK);
+
+    pthread_t srv_th;
+    pthread_create(&srv_th, NULL, bench_scatter_echo_server, chan);
+
+    struct timespec ts = {0, 30 * 1000000L};
+    nanosleep(&ts, NULL);
+
+    srr_connection_t *conn = NULL;
+    assert(srr_connect(svc, NULL, &conn) == SRR_OK);
+
+    uint32_t req_hdr = 0xAA55AA55;
+    char payload[60] = "scatter_gather_bench_payload_59_bytes_vector_io_uds_bench!";
+
+    srr_iovec_t send_iov[2] = {
+        { .iov_base = &req_hdr, .iov_len = sizeof(req_hdr) },
+        { .iov_base = payload,  .iov_len = sizeof(payload) }
+    };
+
+    uint32_t rep_hdr = 0;
+    char rep_body[60] = {0};
+    srr_iovec_t rep_iov[2] = {
+        { .iov_base = &rep_hdr, .iov_len = sizeof(rep_hdr) },
+        { .iov_base = rep_body, .iov_len = sizeof(rep_body) }
+    };
+    size_t reply_sz = 0;
+
+    /* Warmup */
+    for (int i = 0; i < BENCH_WARMUP_ITERS; i++) {
+        srr_sendv(conn, send_iov, 2, rep_iov, 2, &reply_sz);
+    }
+
+    uint64_t *latencies = (uint64_t *)malloc(sizeof(uint64_t) * IPC_BENCH_ITERS);
+    assert(latencies != NULL);
+
+    uint64_t t_start = get_time_ns();
+    for (size_t i = 0; i < IPC_BENCH_ITERS; i++) {
+        uint64_t req_start = get_time_ns();
+        srr_status_t rc = srr_sendv(conn, send_iov, 2, rep_iov, 2, &reply_sz);
+        uint64_t req_end = get_time_ns();
+
+        assert(rc == SRR_OK);
+        latencies[i] = req_end - req_start;
+    }
+    uint64_t t_end = get_time_ns();
+
+    bench_stats_t stats;
+    compute_stats(latencies, IPC_BENCH_ITERS, t_end - t_start, &stats);
+    print_stats("Scatter-Gather IPC / Unix Sockets (srr_sendv/replyv: 2 send slices, 2 reply slices, 64-byte total)", &stats, IPC_BENCH_ITERS);
+
+    srr_pulse(conn, 1, 0);
+    pthread_join(srv_th, NULL);
+    srr_disconnect(conn);
+    srr_channel_destroy(chan);
+    free(latencies);
+}
+
+/*
+ * ----------------------------------------------------------------------------
  * 4. Queue-Full & Backpressure Benchmark (§15 requirement)
  * ----------------------------------------------------------------------------
  */
@@ -502,6 +597,7 @@ int main(void) {
     run_bench_pthread_1to1();
     run_bench_pthread_m2m();
     run_bench_ipc_1to1();
+    run_bench_scatter_gather_ipc();
     run_bench_queue_full();
     run_bench_wire_framing();
     run_bench_serial_loopback();

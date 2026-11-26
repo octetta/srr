@@ -52,6 +52,8 @@ struct srr_request {
     /* Reply storage (for in-process thread sender) */
     void              *reply_buf;
     size_t             reply_cap;
+    const srr_iovec_t *reply_iov;
+    size_t             reply_iovcnt;
     size_t            *out_reply_size;
     size_t             actual_reply_size;
 
@@ -147,5 +149,7 @@ void           srr_ipc_server_stop(srr_channel_t *channel);
 
 int            srr_ipc_write_all(intptr_t handle, const void *buf, size_t len, int timeout_ms);
 int            srr_ipc_read_all(intptr_t handle, void *buf, size_t len, int timeout_ms);
+int            srr_ipc_writev_all(intptr_t handle, const srr_iovec_t *iov, size_t iovcnt, int timeout_ms);
+int            srr_ipc_readv_all(intptr_t handle, const srr_iovec_t *iov, size_t iovcnt, size_t total_to_read, int timeout_ms);
 
 #endif /* SRR_INTERNAL_H */

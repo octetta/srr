@@ -189,6 +189,19 @@ case MSG_GET_TELEMETRY:
 
 For full working code and typed reply handling, see [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md#3-idiomatic-payload-design-structs-unions--zero-copy-dispatch).
 
+### Zero-Copy Scatter-Gather I/O (`srr_sendv` & `srr_replyv`)
+
+For high-throughput Host IPC and in-process threads, SRR provides **Scatter-Gather Vector I/O** (`srr_sendv()`, `srr_sendv_timed()`, `srr_replyv()`). You can transmit a separate command header struct and a large data payload buffer across the channel in a **single atomic syscall** (`writev` / `sendmsg`) with **zero intermediate staging copies**:
+
+```c
+srr_iovec_t send_iov[2] = {
+    { .iov_base = &header, .iov_len = sizeof(header) },
+    { .iov_base = bulk_data, .iov_len = bulk_data_len }
+};
+srr_sendv(conn, send_iov, 2, reply_iov, 2, &reply_size);
+```
+See [examples/example_scatter_gather.c](examples/example_scatter_gather.c) for complete working code.
+
 ---
 
 ## How to Use It (The Core Mental Model)
