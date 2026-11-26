@@ -111,7 +111,71 @@ static void test_sid_protocol_operations(void) {
     srr_p1_io_cog_step(&hub);
     while (hub.tx_tail != hub.tx_head) hub.tx_tail = (hub.tx_tail + 1) % SRR_P1_RING_SIZE;
 
-    /* 3. Test Frequency and Note Helpers */
+    /* 3. Test Multi-Chip Dispatch: Target Chip 1 (0x0051) and Chip 2 (0x0052) */
+    uint8_t sid_chip1_regs[SRR_SID_TOTAL_REGS] = {0};
+    srr_sid_reg_write_t wreg1 = { .reg = SRR_SID_V1_FREQ_LO, .val = 0xAA };
+    srr_wire_header_t hdr_chip1 = {
+        .magic = SRR_WIRE_MAGIC,
+        .version = SRR_WIRE_VERSION,
+        .msg_type = SRR_WIRE_REQUEST,
+        .session_id = 0x53494431,
+        .trans_id = 103,
+        .service_id = SRR_SVC_SID_CHIP(1), /* SID #1 */
+        .operation_id = SRR_SID_OP_WRITE_REG,
+        .payload_len = sizeof(wreg1)
+    };
+    flen = srr_wire_encode_frame(&hdr_chip1, &wreg1, sizeof(wreg1), frame, sizeof(frame));
+    for (size_t i = 0; i < flen; i++) {
+        hub.rx_ring[hub.rx_head] = frame[i];
+        hub.rx_head = (hub.rx_head + 1) % SRR_P1_RING_SIZE;
+    }
+    srr_p1_io_cog_step(&hub);
+    assert(hub.mailbox.service_id == SRR_SVC_SID_CHIP(1));
+    claimed = srr_p1_worker_claim(&hub, 3, SRR_SVC_SID_CHIP(1), &op, &tid, payload, &req_len);
+    assert(claimed);
+    assert(op == SRR_SID_OP_WRITE_REG);
+    assert(req_len == 2);
+    sid_chip1_regs[payload[0]] = payload[1];
+    assert(sid_chip1_regs[SRR_SID_V1_FREQ_LO] == 0xAA);
+    assert(sid_regs[SRR_SID_V1_FREQ_LO] == 0x00); /* Chip 0 untouched */
+
+    status = 0;
+    srr_p1_worker_reply(&hub, 3, tid, &status, 1, false);
+    srr_p1_io_cog_step(&hub);
+    while (hub.tx_tail != hub.tx_head) hub.tx_tail = (hub.tx_tail + 1) % SRR_P1_RING_SIZE;
+
+    /* 4. Test Multi-Chip Batch Write Tuple: [{chip, reg, val}] */
+    srr_sid_multi_reg_t multi_batch[2] = {
+        { .chip = 0, .reg = SRR_SID_MODE_VOL, .val = 0x0E },
+        { .chip = 1, .reg = SRR_SID_MODE_VOL, .val = 0x0F }
+    };
+    srr_wire_header_t hdr_multi = {
+        .magic = SRR_WIRE_MAGIC,
+        .version = SRR_WIRE_VERSION,
+        .msg_type = SRR_WIRE_REQUEST,
+        .session_id = 0x53494431,
+        .trans_id = 104,
+        .service_id = SRR_SVC_SID_BASE,
+        .operation_id = SRR_SID_OP_MULTI_WRITE_BATCH,
+        .payload_len = sizeof(multi_batch)
+    };
+    flen = srr_wire_encode_frame(&hdr_multi, multi_batch, sizeof(multi_batch), frame, sizeof(frame));
+    for (size_t i = 0; i < flen; i++) {
+        hub.rx_ring[hub.rx_head] = frame[i];
+        hub.rx_head = (hub.rx_head + 1) % SRR_P1_RING_SIZE;
+    }
+    srr_p1_io_cog_step(&hub);
+    claimed = srr_p1_worker_claim(&hub, 2, SRR_SVC_SID_BASE, &op, &tid, payload, &req_len);
+    assert(claimed);
+    assert(op == SRR_SID_OP_MULTI_WRITE_BATCH);
+    assert(req_len == sizeof(multi_batch));
+
+    status = 2;
+    srr_p1_worker_reply(&hub, 2, tid, &status, 1, false);
+    srr_p1_io_cog_step(&hub);
+    while (hub.tx_tail != hub.tx_head) hub.tx_tail = (hub.tx_tail + 1) % SRR_P1_RING_SIZE;
+
+    /* 5. Test Frequency and Note Helpers */
     uint16_t freq_440 = srr_sid_freq_hz(440.0f);
     assert(freq_440 == 7492);
 

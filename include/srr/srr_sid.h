@@ -18,7 +18,11 @@ extern "C" {
  * Wire Service ID: 0x0051 ("SID")
  */
 
-#define SRR_SVC_SID             0x0051U
+#define SRR_SVC_SID_BASE        0x0050U /* Service ID Base: 0x0050..0x0055 for SIDs 0..5 */
+#define SRR_SVC_SID_CHIP(n)     (SRR_SVC_SID_BASE + (uint16_t)(n))
+#define SRR_SVC_SID             0x0050U /* Default SID (alias for Chip 0) */
+#define SRR_SVC_SID_LEGACY      0x0051U /* Legacy alias */
+#define SRR_SID_MAX_CHIPS       6U      /* Maximum SID instances on Propeller P1 (18 voices) */
 
 /* Operations */
 #define SRR_SID_OP_WRITE_REG    0x0001U /* Write 1 register: [reg(1B), val(1B)] -> Reply [status(1B)] */
@@ -28,6 +32,12 @@ extern "C" {
 #define SRR_SID_OP_READ_REGS    0x0005U /* Read back current 25 registers -> Reply [25 bytes] */
 #define SRR_SID_OP_NOTE_ON      0x0006U /* Note on: [voice(1B), note(1B), wave(1B), ad(1B), sr(1B)] */
 #define SRR_SID_OP_NOTE_OFF     0x0007U /* Note off: [voice(1B)] */
+
+/* Multi-Chip Operations */
+#define SRR_SID_OP_MULTI_WRITE_REG   0x0010U /* Write 1 register to specific chip: [chip(1B), reg(1B), val(1B)] */
+#define SRR_SID_OP_MULTI_WRITE_BATCH 0x0011U /* Write batch to chips: [ {chip, reg, val}... ] */
+#define SRR_SID_OP_RESET_ALL         0x0012U /* Reset all active SID chips (up to 6 chips / 18 voices) */
+#define SRR_SID_OP_STEREO_PAN_NOTE   0x0013U /* Dual-SID Stereo Note: [note(1B), wave(1B), detune(1B)] */
 
 /* Standard SID Registers (MOS 6581 / 8580) */
 #define SRR_SID_NUM_REGS        25U
@@ -89,6 +99,13 @@ typedef struct {
     uint8_t reg;
     uint8_t val;
 } srr_sid_reg_write_t;
+
+/* Multi-SID register write for targeting up to 6 chips */
+typedef struct {
+    uint8_t chip;   /* Chip index: 0..5 */
+    uint8_t reg;    /* Register index: 0x00..0x1F */
+    uint8_t val;    /* Value byte */
+} srr_sid_multi_reg_t;
 
 typedef struct {
     uint8_t voice;  /* 0, 1, or 2 */

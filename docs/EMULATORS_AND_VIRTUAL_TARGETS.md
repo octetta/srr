@@ -116,41 +116,48 @@ The repository provides clean, production-ready Spin and PASM implementations in
 
 * **[`FullDuplexSerial.spin`](../examples/p1_spin/FullDuplexSerial.spin):** Canonical high-speed PASM UART driver (9,600 to 230,400+ baud) running inside a dedicated Cog, communicating via circular buffers in Hub RAM.
 * **[`SIDcog.spin`](../examples/p1_spin/SIDcog.spin):** Dedicated PASM audio synthesis Cog emulating the MOS 6581 sound synthesizer (3 voices, PWM counter DAC audio output on pins P10/P11, reading 29 SID registers from Hub RAM).
-* **[`SRR_SID_Server.spin`](../examples/p1_spin/SRR_SID_Server.spin):** Top-level multi-cog application orchestrating the PASM UART (Cog 1), the PASM SID synthesizer (Cog 2), and the SRR wire router (Cog 0) to expose `/dev/sid` over serial.
+* **[`SRR_SID_Server.spin`](../examples/p1_spin/SRR_SID_Server.spin):** Single SID synth server over PASM UART.
+* **[`SRR_MultiSID_Server.spin`](../examples/p1_spin/SRR_MultiSID_Server.spin):** Multi-SID server utilizing all 8 Cogs (Cog 0: SRR Router, Cog 1: PASM UART, Cogs 2..7: 6 independent MOS 6581 SID engines / 18 hardware voices with a 192-byte Hub RAM footprint).
 * **[`SRR_HubMailbox.spin`](../examples/p1_spin/SRR_HubMailbox.spin):** Implements the Hub RAM mailbox, hardware lock arbitration (`lockset` / `lockclr`), 8-Cog routing, and request/reply buffer handoffs.
 * **[`SRR_Demo.spin`](../examples/p1_spin/SRR_Demo.spin):** Multi-cog demo where Cog 0 (Client) issues synchronous `SendRequest` calls to Cog 1 (Server), receiving synchronous replies and emitting asynchronous pulses.
 
-### 5.2 The SIDcog Resource Manager: High-Speed Serial Synth
-SRR exposes the Propeller P1 MOS 6581 SID sound synthesizer as a standard SRR resource (`service_id = 0x0051` or `SRR_SVC_SID`):
+### 5.2 The Multi-SID Resource Manager: Stereo & 18-Voice Polyphony
+SRR exposes up to 6 Propeller P1 MOS 6581 SID sound synthesizers (`service_id = 0x0050..0x0055` for Chips 0..5):
 
 1. **Integrated Multi-Cog Simulation (`--sim`):**
-   Run the arpeggio and filter sweep test right from your desktop with zero hardware:
+   Test stereo chorus and 6-voice polyphony right from your desktop with zero hardware:
    ```bash
    make examples
-   ./examples/p1_sid/srr_sid_cli --sim
+
+   # Run Stereo Dual-SID Chorus Demo (Left on SID 0, Right on SID 1):
+   ./examples/p1_sid/srr_sid_cli --sim stereo
+
+   # Run 6-Voice Polyphonic Chord Synthesizer:
+   ./examples/p1_sid/srr_sid_cli --sim poly
    ```
 2. **Interactive Host Control over Physical UART:**
    Connect to a Propeller board (e.g. ActivityBoard, QuickStart) at 115,200 baud:
    ```bash
-   # Reset and silence:
-   ./examples/p1_sid/srr_sid_cli /dev/ttyUSB0 reset
+   # Silence all 6 SID chips (18 voices):
+   ./examples/p1_sid/srr_sid_cli /dev/ttyUSB0 reset-all
 
-   # Play Commodore 64 chord arpeggio:
-   ./examples/p1_sid/srr_sid_cli /dev/ttyUSB0 arp
+   # Play Stereo Dual-SID Chorus Demo:
+   ./examples/p1_sid/srr_sid_cli /dev/ttyUSB0 stereo
 
-   # Resonant low-pass filter sweep:
-   ./examples/p1_sid/srr_sid_cli /dev/ttyUSB0 sweep
+   # Play 6-Voice Polyphonic Chords:
+   ./examples/p1_sid/srr_sid_cli /dev/ttyUSB0 poly
 
-   # Read formatted register snapshot ($00..$18):
-   ./examples/p1_sid/srr_sid_cli /dev/ttyUSB0 read
+   # Target specific chip (e.g. Chip 1) and read registers:
+   ./examples/p1_sid/srr_sid_cli /dev/ttyUSB0 --chip 1 read
 
-   # Asynchronous one-way pulse write (reg $04 = $21: Voice 1 Sawtooth + Gate On):
-   ./examples/p1_sid/srr_sid_cli /dev/ttyUSB0 pulse 0x04 0x21
+   # Send asynchronous pulse to SID 1 Voice 1:
+   ./examples/p1_sid/srr_sid_cli /dev/ttyUSB0 --chip 1 pulse 0x04 0x21
    ```
 
 3. **Cross-Platform Python Client:**
    ```bash
-   python3 examples/p1_sid/srr_sid_client.py --port /dev/ttyUSB0 arp
+   # Run Dual-SID stereo demo:
+   python3 examples/p1_sid/srr_sid_client.py --port /dev/ttyUSB0 stereo
    ```
 
 ```spin
