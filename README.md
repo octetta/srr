@@ -546,6 +546,7 @@ make win32
 
 ## Documentation Index
 
+- **[Autonomous Agent Reference & Playbook (AGENTS.md)](AGENTS.md):** Definitive reference for AI coding agents and systems engineers covering architectural invariants, copy-paste platform code templates, payload limits across tiers, anti-patterns, and the S-Suite architectural roadmap (`srm`, `sio`, `snet`, `stmr`, `swasm`).
 - **[Correctness & Concurrency Audit Report](docs/CORRECTNESS_AUDIT.md):** Detailed analysis of resolved defects, concurrency state arbitration, lifetime rules, regression tests, and operational risk assessment.
 - **[Protocol Conformance Specification](docs/PROTOCOL_CONFORMANCE.md):** Formal specification distinguishing 24-byte IPC streaming framing from 32-byte Device Wire framing, byte ordering, CRC-16, COBS, and cross-language conformance matrix.
 - **[Platform Verification & Resource Report](docs/PLATFORM_VERIFICATION.md):** Truthful resource budgets, compiler reports, and distinction between host emulation and physical target hardware for RP2040 Pico, ESP32, AVR, and Parallax P1.
