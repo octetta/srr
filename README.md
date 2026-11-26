@@ -151,6 +151,44 @@ Every request also carries built-in routing metadata in its 32-byte wire header:
 * `operation_id` (16-bit): Action to perform (e.g., `1 = Start`, `2 = SetSpeed`).
 * `trans_id` (32-bit): Unique correlation ID managed automatically by SRR.
 
+### The QNX-Style Struct & Union Pattern (Zero-Copy Command Dispatch)
+
+How do real-world embedded and safety-critical systems structure messages over SRR without serializing into JSON or incurring dynamic heap allocations?
+
+Historically, QNX applications and drivers used a **single-buffer `union` dispatch pattern**:
+1. **Request Structs** start with a 16-bit `type` (opcode) field.
+2. The server defines a `union` of all possible request structs to know the maximum payload size at compile time.
+3. The server inspects the leading `msg->type` and switches directly to the corresponding struct pointer:
+
+```c
+// 1. Define typed request payloads
+typedef struct { uint16_t type; uint16_t motor_id; float speed; } req_set_speed_t;
+typedef struct { uint16_t type; uint16_t motor_id; }              req_get_telemetry_t;
+
+// 2. Define server request union
+typedef union {
+    uint16_t            type;
+    req_set_speed_t     set_speed;
+    req_get_telemetry_t get_telemetry;
+} server_msg_union_t;
+
+// 3. Server zero-copy single-buffer dispatch
+const server_msg_union_t *msg = (const server_msg_union_t *)srr_request_data(req);
+switch (msg->type) {
+case MSG_SET_SPEED:
+    set_motor_speed(msg->set_speed.motor_id, msg->set_speed.speed);
+    srr_reply(req, &ack, sizeof(ack));
+    break;
+case MSG_GET_TELEMETRY:
+    srr_reply(req, &telemetry, sizeof(telemetry));
+    break;
+}
+```
+
+*(On wire transports using `srr_embedded.h`, the 32-byte wire header's built-in `operation_id` field serves as this discriminator directly!)*
+
+For full working code and typed reply handling, see [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md#3-idiomatic-payload-design-structs-unions--zero-copy-dispatch).
+
 ---
 
 ## How to Use It (The Core Mental Model)

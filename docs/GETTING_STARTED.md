@@ -156,7 +156,162 @@ The request processing, message payload handling, timeout semantics, and reply l
 
 ---
 
-## 3. Handling Timeouts & Deadlines
+## 3. Idiomatic Payload Design: Structs, Unions & Zero-Copy Dispatch
+
+A frequent question from developers adopting SRR is:
+> *"Does SRR enforce a payload schema (like Protobuf or JSON)? How did real-world QNX applications structure messages in practice?"*
+
+Like the QNX microkernel, SRR treats message payloads as **opaque byte buffers (`const void *`)**. This gives you complete freedom to transmit anything from JSON strings to raw binary sensor frames.
+
+However, **safety-critical and real-time systems established a classic, battle-tested pattern** that avoids dynamic memory allocation (`malloc`), eliminates parsing overhead, and guarantees compile-time type safety: **The QNX-style Struct and Union Pattern**.
+
+### The Pattern in 4 Steps:
+1. **Define typed C structs** for every request and reply, using fixed-width integer and float types (`<stdint.h>`).
+2. **Include a leading message discriminator** (`uint16_t type` / opcode) as the first field of each request struct.
+3. **Define a `union`** of all possible incoming request structs on the server.
+4. **Dispatch with a `switch` statement** directly from the incoming buffer: **zero `malloc`, zero serialization parsing, and zero copy**.
+
+#### 1. Defining the Message Schema (`messages.h`)
+```c
+#include <stdint.h>
+
+// 1. Message Type Discriminators (Opcodes)
+typedef enum {
+    MSG_CMD_SET_SPEED     = 0x0101,
+    MSG_CMD_GET_TELEMETRY = 0x0102,
+    MSG_CMD_EMERGENCY_STOP= 0x0103,
+} msg_type_t;
+
+// 2. Request Payloads (leading field MUST match msg_type_t)
+typedef struct {
+    uint16_t type;          // MSG_CMD_SET_SPEED
+    uint16_t motor_index;
+    float    target_rpm;
+} req_set_speed_t;
+
+typedef struct {
+    uint16_t type;          // MSG_CMD_GET_TELEMETRY
+    uint16_t motor_index;
+} req_get_telemetry_t;
+
+typedef struct {
+    uint16_t type;          // MSG_CMD_EMERGENCY_STOP
+} req_emergency_stop_t;
+
+// 3. Server Request Union (calculates the maximum request size at compile time)
+typedef union {
+    uint16_t             type;
+    req_set_speed_t      set_speed;
+    req_get_telemetry_t  get_telemetry;
+    req_emergency_stop_t estop;
+} server_msg_union_t;
+
+// 4. Reply Payloads
+typedef struct {
+    int32_t  status_code;   // 0 = OK, negative = error
+} reply_ack_t;
+
+typedef struct {
+    int32_t  status_code;
+    float    current_rpm;
+    float    temperature_c;
+    uint32_t fault_flags;
+} reply_telemetry_t;
+```
+
+#### 2. Server Implementation: Zero-Copy Switch Dispatch
+```c
+void run_motor_server(srr_channel_t *channel) {
+    srr_request_t *req = NULL;
+
+    while (srr_receive(channel, &req) == SRR_OK) {
+        if (srr_request_is_pulse(req)) {
+            // One-way non-blocking pulses: dispose and continue
+            srr_request_dispose(req);
+            continue;
+        }
+
+        const uint8_t *data = (const uint8_t *)srr_request_data(req);
+        size_t size = srr_request_size(req);
+
+        // Sanity check: must contain at least the opcode header
+        if (size < sizeof(uint16_t)) {
+            reply_ack_t err = { .status_code = -1 };
+            srr_reply(req, &err, sizeof(err));
+            continue;
+        }
+
+        // Direct zero-copy overlay: cast payload directly to the union
+        const server_msg_union_t *msg = (const server_msg_union_t *)data;
+
+        switch (msg->type) {
+        case MSG_CMD_SET_SPEED:
+            if (size >= sizeof(req_set_speed_t)) {
+                apply_motor_speed(msg->set_speed.motor_index, msg->set_speed.target_rpm);
+                reply_ack_t ack = { .status_code = 0 };
+                srr_reply(req, &ack, sizeof(ack));
+            }
+            break;
+
+        case MSG_CMD_GET_TELEMETRY:
+            if (size >= sizeof(req_get_telemetry_t)) {
+                reply_telemetry_t telem = {
+                    .status_code = 0,
+                    .current_rpm = read_motor_rpm(msg->get_telemetry.motor_index),
+                    .temperature_c = read_motor_temp(msg->get_telemetry.motor_index),
+                    .fault_flags = 0
+                };
+                srr_reply(req, &telem, sizeof(telem));
+            }
+            break;
+
+        case MSG_CMD_EMERGENCY_STOP:
+            trigger_hard_stop();
+            reply_ack_t ack = { .status_code = 0 };
+            srr_reply(req, &ack, sizeof(ack));
+            break;
+
+        default: {
+            reply_ack_t err = { .status_code = -2 }; // Unknown opcode
+            srr_reply(req, &err, sizeof(err));
+            break;
+        }
+        }
+    }
+}
+```
+
+#### 3. Client Implementation: Fully Type-Safe Call
+```c
+// Client sends a typed struct and receives a typed reply directly on the stack
+req_set_speed_t cmd = {
+    .type = MSG_CMD_SET_SPEED,
+    .motor_index = 0,
+    .target_rpm = 1500.0f
+};
+reply_ack_t reply = {0};
+size_t reply_len = 0;
+
+srr_status_t rc = srr_send(conn, &cmd, sizeof(cmd), &reply, sizeof(reply), &reply_len);
+if (rc == SRR_OK && reply.status_code == 0) {
+    printf("Motor speed updated successfully.\n");
+}
+```
+
+### Alternative: Using Built-in `service_id` & `operation_id` (Embedded Tier)
+When using SRR over physical wire transports (`srr_embedded.h`), the 32-byte SRR wire frame header **already includes** `service_id` (16-bit) and `operation_id` (16-bit). In this tier:
+* `service_id` identifies the target subsystem (e.g., `0x0010 = MotorController`).
+* `operation_id` identifies the command (e.g., `0x0001 = SetSpeed`).
+* The payload simply contains `struct { uint16_t motor_index; float target_rpm; }` without needing a leading `type` tag.
+* The server's `srr_service_handler_t` receives `operation_id` directly as a parameter and casts the payload directly to the command struct.
+
+> [!TIP]
+> **Why this matters for embedded & safety-critical systems:**
+> By avoiding text-based parsers (JSON, XML) and dynamic serialization engines, message dispatch is completely deterministic ($O(1)$ constant time) and causes **zero heap fragmentation**.
+
+---
+
+## 4. Handling Timeouts & Deadlines
 
 Use `srr_send_timed()` to enforce maximum wait times:
 
@@ -177,7 +332,7 @@ if (status == SRR_TIMEOUT) {
 
 ---
 
-## 4. One-Way Pulses (Heartbeats / Event Ticks)
+## 5. One-Way Pulses (Heartbeats / Event Ticks)
 
 For lightweight, non-blocking notifications that require no reply:
 
@@ -205,7 +360,7 @@ if (srr_receive(channel, &item) == SRR_OK) {
 
 ---
 
-## 5. Using the Language Adapters
+## 6. Using the Language Adapters
 
 ### Erlang/OTP
 ```erlang
