@@ -133,11 +133,13 @@ SRR abstracts the underlying OS IPC mechanism while presenting an identical API:
 | **In-Process** | `pthread` CV | Direct pointer | Mutex + Condition Variable |
 | **POSIX** | Unix Domain Sockets | `/tmp/srr_<name>.sock` | Stream sockets (`AF_UNIX`) |
 | **Windows** | Named Pipes | `\\.\pipe\srr_<name>` | `CreateNamedPipeA` / `CreateFileA` |
+| **Browser (Wasm)** | `SharedArrayBuffer` | Direct pointer & Hub | Emscripten `-pthread` + `Atomics.wait()`/`notify()` (See [Wasm Web Workers Guide](WASM_WEB_WORKERS_SRR.md)) |
 
 ### Platform Handle Representation
 Internal request and connection structures use `intptr_t`:
 - On POSIX: casts to `int` socket file descriptor.
 - On Windows: casts to `HANDLE`.
+- On WebAssembly: casts to pointer/offset within `SharedArrayBuffer`.
 This eliminates code duplication in the core transaction logic.
 
 ---

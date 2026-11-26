@@ -551,6 +551,7 @@ make win32
 - **[Platform Verification & Resource Report](docs/PLATFORM_VERIFICATION.md):** Truthful resource budgets, compiler reports, and distinction between host emulation and physical target hardware for RP2040 Pico, ESP32, AVR, and Parallax P1.
 - **[Emulators, Virtual Targets & FFI Guide](docs/EMULATORS_AND_VIRTUAL_TARGETS.md):** How to run AVR (simavr), Pico, ESP32, and Parallax P1 (Spin/spinsim) on Fedora without physical hardware, plus scripting FFI guide (`libsrr.so`).
 - **[Composing Distributed Systems with SRR](docs/COMPOSING_SYSTEMS_WITH_SRR.md):** Complete architectural guide on system topologies, dynamic resolvers, mesh federation, and real-world case studies (synthesizers, robotics, industrial control).
+- **[In-Browser High-Performance IPC: SRR over WebAssembly and Web Workers](docs/WASM_WEB_WORKERS_SRR.md):** Architectural guide on running SRR in web browsers over `SharedArrayBuffer` with Emscripten `-pthread`, comparative analysis against `postMessage()`, `Comlink`, and Transferable Objects, and zero-GC guarantees.
 - **[BEAM Inter-Op Guide (Erlang / Elixir / Gleam)](adapters/beam/README.md):** Native Unix Domain Socket `gen_server`, port drivers, Elixir Hex package, and Gleam bitstring framing.
 - **[Scripting & Automation Guide](docs/SCRIPTING_AND_AUTOMATION.md):** Integration guide and examples for Bash, Python, Perl, Tcl, PHP, PowerShell, and Gforth.
 - **[Getting Started Guide](docs/GETTING_STARTED.md):** Introductory tutorial covering threads, IPC, BEAM, and WebAudio.
